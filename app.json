@@ -1,44 +1,68 @@
 {
   "expo": {
-    "name": "Noor-Alzakireen",
-    "slug": "Noor-Alzakireen",
+    "name": "Noor Al-Zakireen",
+    "slug": "noor-al-zakireen",
     "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "experiments": {
+      "typedRoutes": true
+    },
     "scheme": "nooralzakireen",
-    "userInterfaceStyle": "automatic",
+    "orientation": "portrait",
+    "icon": "./src/assets/icon.png",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "icon": "./assets/expo.icon"
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "التطبيق يحتاج المايكروفون حتى تسجل صوتك وانت تقرأ الذكر",
+        "NSSpeechRecognitionUsageDescription": "التطبيق يحتاج التعرف على الصوت للتسبيح الصوتي"
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./src/assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
       },
-      "predictiveBackGestureEnabled": false
+      "permissions": [
+        "RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "package": "com.anonymous.nooralzakireen"
     },
     "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./src/assets/favicon.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "android": {
-            "image": "./assets/images/splash-icon.png",
-            "imageWidth": 76
-          }
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-av",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "التطبيق يحتاج الميكرفون للتسبيح الصوتي",
+          "speechRecognitionPermission": "التطبيق يحتاج التعرف على الصوت للتسبيح الصوتي"
+        }
+      ],
+      "expo-font",
+      "expo-image",
+      "expo-sharing"
     ],
-    "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
-    }
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3ab6fff3-6b65-4a64-9da5-a18b45f5d6e3"
+      }
+    },
+    "owner": "montazr99"
   }
 }
