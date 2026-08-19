@@ -1,7 +1,9 @@
 // src/app/settings/phone-wallpapers.tsx
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Asset } from 'expo-asset';
 import { BlurView } from 'expo-blur';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
@@ -13,12 +15,13 @@ import {
   Modal,
   Platform,
   Image as RNImage,
-  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const LIKES_KEY = 'wallpaper_liked_ids';
 
@@ -78,9 +81,59 @@ const WALLPAPERS: WallpaperItem[] = [
 const CATEGORIES = ['الكل', 'مقدسات', 'روحانيات', 'طبيعة'];
 
 // expo-media-library غير مدعومة على الويب إطلاقاً، لذا نستوردها فقط على الموبايل
-let MediaLibrary: typeof import('expo-media-library') | null = null;
+// ⚠️ تعديل: نستورد من "expo-media-library/legacy" بدل "expo-media-library" مباشرة -
+// النسخة المركّبة بالمشروع (~56.0.10) صار فيها createAssetAsync بالمسار الجديد
+// deprecated (رسالة الخطأ الفعلية كانت: "Method createAssetAsync imported from
+// expo-media-library is deprecated. Import the legacy API from
+// expo-media-library/legacy..."). المسار legacy يوفر نفس الدوال (createAssetAsync,
+// requestPermissionsAsync, إلخ) بنفس التوقيع تماماً، بس بدون تحذير deprecated.
+let MediaLibrary: typeof import('expo-media-library/legacy') | null = null;
 if (Platform.OS !== 'web') {
-  MediaLibrary = require('expo-media-library');
+  MediaLibrary = require('expo-media-library/legacy');
+}
+
+// resolveAssetSource يرجع مسار موزّع/مصدر أصل (asset resource) مو مسار ملف
+// حقيقي بنسخة الإنتاج (خصوصاً أندرويد) - MediaLibrary وSharing يحتاجون مسار
+// file:// حقيقي، فلازم ننزّل الصورة محلياً أول عبر expo-asset قبل أي عملية عليها
+//
+// ⚠️ تعديل: رسالة الخطأ الفعلية بالمشاركة كانت "expected scheme to be 'file',
+// got 'null'" - يعني asset.localUri/asset.uri ما رجعوا مسار file:// حقيقي رغم
+// إن الدالة ما رمت استثناء. نضيف الآن تحقق صريح من الـscheme، ولو مو file://
+// ننسخ الصورة يدوياً لمجلد الكاش المضمون عبر expo-file-system - هذا يضمن مسار
+// file:// صالح 100% بغض النظر شنو رجّعت expo-asset.
+async function resolveLocalUri(uri: any): Promise<string> {
+  const asset = Asset.fromModule(uri);
+  if (!asset.localUri) {
+    await asset.downloadAsync();
+  }
+  let resolved = asset.localUri ?? asset.uri;
+
+  if (!resolved) {
+    throw new Error('resolveLocalUri: ماكو مسار صورة صالح بعد التحميل');
+  }
+
+  // نتأكد المسار فعلاً بصيغة file:// - لو لا (مثلاً مسار أصل داخلي أو رابط
+  // مو مدعوم)، ننسخه يدوياً لمسار مضمون بمجلد الكاش
+  if (!resolved.startsWith('file://')) {
+    const filename = resolved.split('/').pop()?.split('?')[0] || `wallpaper_${Date.now()}.jpg`;
+    const destination = `${FileSystem.cacheDirectory}${filename}`;
+    await FileSystem.copyAsync({ from: resolved, to: destination });
+    resolved = destination;
+  }
+
+  return resolved;
+}
+
+// يحول أي خطأ ملتقط لنص مختصر مفهوم - نعرضه مباشرة بالتنبيه على الشاشة نفسها
+// (مؤقتاً للتشخيص) بدل ما يضيع بالكونسول ويحتاج adb لمشاهدته
+function describeError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const e = err as any;
+    const code = e.code ? `[${e.code}] ` : '';
+    const message = e.message || String(err);
+    return `${code}${message}`;
+  }
+  return String(err);
 }
 
 export default function PhoneWallpapersScreen() {
@@ -105,25 +158,25 @@ export default function PhoneWallpapersScreen() {
 
   const shareWallpaper = async (item: WallpaperItem) => {
     try {
-      const resolved = RNImage.resolveAssetSource?.(item.uri)?.uri ?? item.uri;
       const available = await Sharing.isAvailableAsync();
       if (!available) {
         Alert.alert('غير متاح', 'المشاركة غير مدعومة على هذا الجهاز');
         return;
       }
-      await Sharing.shareAsync(resolved);
-    } catch {
-      Alert.alert('خطأ', 'تعذّرت المشاركة');
+      const localUri = await resolveLocalUri(item.uri);
+      await Sharing.shareAsync(localUri);
+    } catch (err) {
+      console.log('shareWallpaper error:', err);
+      Alert.alert('خطأ بالمشاركة', describeError(err));
     }
   };
 
   const filtered = cat === 'الكل' ? WALLPAPERS : WALLPAPERS.filter(w => w.category === cat);
 
   const saveToGallery = async (item: WallpaperItem) => {
-    const resolved = RNImage.resolveAssetSource?.(item.uri)?.uri ?? item.uri;
-
     if (Platform.OS === 'web' || !MediaLibrary) {
       try {
+        const resolved = RNImage.resolveAssetSource?.(item.uri)?.uri ?? item.uri;
         const link = document.createElement('a');
         link.href = resolved;
         link.download = `${item.title || 'wallpaper'}.jpg`;
@@ -136,18 +189,32 @@ export default function PhoneWallpapersScreen() {
       return;
     }
 
-    const { status } = await MediaLibrary.requestPermissionsAsync();
+    // ⚠️ writeOnly=true: التطبيق يحتاج بس يضيف صور للمعرض، مو يقرأ صور المستخدم
+    // الموجودة مسبقاً - هذا يطلب صلاحية أضيق (وأسهل موافقة) خصوصاً على أندرويد
+    // ١٣+ حيث صلاحية القراءة الكاملة (READ_MEDIA_IMAGES) منفصلة وأصعب موافقة
+    const { status } = await MediaLibrary.requestPermissionsAsync(true);
     if (status !== 'granted') {
       Alert.alert('تنبيه', 'يرجى السماح بالوصول للصور');
       return;
     }
     setSaving(item.id);
     try {
-      const asset = await MediaLibrary.createAssetAsync(resolved);
-      await MediaLibrary.createAlbumAsync('نور الذاكرين', asset, false);
+      const localUri = await resolveLocalUri(item.uri);
+      const asset = await MediaLibrary.createAssetAsync(localUri);
+
+      // لو الألبوم موجود مسبقاً، createAlbumAsync ينكسر على بعض إصدارات أندرويد
+      // بدل ما يضيف الصورة له - لازم نتأكد أول ونستخدم addAssetsToAlbumAsync
+      const existingAlbum = await MediaLibrary.getAlbumAsync('نور الذاكرين');
+      if (existingAlbum) {
+        await MediaLibrary.addAssetsToAlbumAsync([asset], existingAlbum, false);
+      } else {
+        await MediaLibrary.createAlbumAsync('نور الذاكرين', asset, false);
+      }
+
       Alert.alert('تم الحفظ ✓', `تم حفظ "${item.title}" في معرض الصور`);
-    } catch {
-      Alert.alert('خطأ', 'تعذّر حفظ الصورة');
+    } catch (err) {
+      console.log('saveToGallery error:', err);
+      Alert.alert('خطأ بالحفظ', describeError(err));
     } finally {
       setSaving(null);
     }

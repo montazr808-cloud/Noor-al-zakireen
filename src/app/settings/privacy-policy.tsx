@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { type ReactElement } from 'react';
-import { ImageBackground, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { type ReactElement, useEffect } from 'react';
+import { BackHandler, ImageBackground, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
@@ -100,6 +102,16 @@ const SECTIONS = [
 export default function PrivacyPolicyScreen() {
   const { backgroundId } = useThemeContext();
   const bgOption = getSelectedBackground(backgroundId);
+
+  // زر الرجوع الفعلي بالهاتف (مو زر السهم بالشاشة) - نفس سلوك باقي أقسام الإعدادات
+  // بالضبط الآن بعد ما صار هذا الملف جزء من مجلد settings مثلهم تمامًا
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      router.replace('/settings');
+      return true;
+    });
+    return () => sub.remove();
+  }, []);
 
   const screenContent = (
     <SafeAreaView style={[styles.container, !bgOption.image && { backgroundColor: bgOption.color }]}>

@@ -14,8 +14,8 @@ export type BackgroundId =
   | 'masjid_azraq'
   | 'purple_mandala'
   | 'blue_mandala'
-  | 'karbala_aerial';
-
+  | 'karbala_aerial'
+  | 'kadhimiya';
 export type BackgroundOption = {
   id: BackgroundId;
   label: string;
@@ -52,12 +52,18 @@ export const BACKGROUND_OPTIONS: BackgroundOption[] = [
     require('../assets/backgrounds/najef.jpg')),
   makeOption('masjid_azraq',    'المسجد الأزرق',      'Blue Mosque',     '#0e1b2a', 0.35,
     require('../assets/backgrounds/masjid_azraq.jpg')),
+  // ملاحظة: كان مسجل هنا ان الملفين الفعليين على القرص مبدّلين بالمحتوى، فسوينا
+  // تبديل بالـ require تعويضاً عن هذا. المستخدم يبلغ الآن إن التسميات صارت معكوسة
+  // (يعني هذا التعويض صار هو المشكلة، إما لأن التشخيص الأصلي كان معكوس، أو الملفات
+  // انصلحت على القرص من عدها) - رجعناها لمصدرها الطبيعي المباشر، وننتظر تأكيده
   makeOption('purple_mandala',  'ماندالا بنفسجية',    'Purple Mandala',  '#2a1240', 0.30,
     require('../assets/backgrounds/purple_mandala.jpg')),
   makeOption('blue_mandala',    'ماندالا زرقاء',      'Blue Mandala',    '#0b1f2e', 0.30,
     require('../assets/backgrounds/blue_mandala.jpg')),
   makeOption('karbala_aerial',  'كربلاء من الأعلى',   'Karbala Aerial',  '#0a0a0a', 0.35,
     require('../assets/backgrounds/karbala_aerial.jpg')),
+  makeOption('kadhimiya',       'الكاظمية',           'Kadhimiya',       '#1a1200', 0.35,
+    require('../assets/backgrounds/kadhimiya.jpg')),
 ];
 
 export const BACKGROUNDS = BACKGROUND_OPTIONS;

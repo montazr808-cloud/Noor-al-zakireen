@@ -7,17 +7,20 @@ import { Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 // هذا يضمن نفس الحجم بالضبط بكل الشاشات دايماً
 
 const OUTER_PADDING = 16; // paddingVertical لكل جهة
-const MAX_FRAME_HEIGHT = 890;
-const MAX_FRAME_WIDTH  = 412;
 const SAFETY_MARGIN    = 12;
 
 export function usePhoneFrameSize() {
   const { width, height } = useWindowDimensions();
   const isWideScreen = Platform.OS === 'web' && width > 800;
 
+  // على الشاشات الكبيرة جداً (2K/4K) نكبّر الحد الأقصى تدريجياً
+  // حتى لا يبين إطار الهاتف صغير زيادة وسط مساحة فاضية كبيرة
+  const maxFrameHeight = width >= 1600 ? 1000 : width >= 1200 ? 940 : 890;
+  const maxFrameWidth  = width >= 1600 ? 460  : width >= 1200 ? 430 : 412;
+
   const framePadding = OUTER_PADDING * 2 + SAFETY_MARGIN;
-  const frameHeight = Math.max(420, Math.min(MAX_FRAME_HEIGHT, height - framePadding));
-  const frameWidth  = Math.min(MAX_FRAME_WIDTH, frameHeight * 0.46);
+  const frameHeight = Math.max(420, Math.min(maxFrameHeight, height - framePadding));
+  const frameWidth  = Math.min(maxFrameWidth, frameHeight * 0.46);
 
   return { isWideScreen, frameWidth, frameHeight };
 }

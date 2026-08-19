@@ -1,12 +1,14 @@
+import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import * as Clipboard from 'expo-clipboard';
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
+  Image,
   ImageBackground,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   Share,
   StyleSheet,
@@ -15,6 +17,9 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+// (نفس السبب اللي خلى عنوان "المجيب" ملازق بشريط الحالة/الشبكة بدل ما ينعزل عنه متل باقي الشاشات)
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
@@ -30,15 +35,15 @@ import {
   setSelectedMarja,
   type HistoryItem,
   type Marja,
-} from './api/askSheikh';
+} from '@/utils/askSheikh';
 
-const MARJAS: { id: Marja; emoji: string }[] = [
-  { id: 'sistani', emoji: '🕌' },
-  { id: 'khamenei', emoji: '📖' },
-  { id: 'najafi', emoji: '🌙' },
-  { id: 'sadr', emoji: '🌿' },
-  { id: 'yaqoubi', emoji: '📚' },
-  { id: 'general', emoji: '⚖️' },
+const MARJAS: { id: Marja }[] = [
+  { id: 'sistani' },
+  { id: 'khamenei' },
+  { id: 'najafi' },
+  { id: 'sadr' },
+  { id: 'yaqoubi' },
+  { id: 'general' },
 ];
 
 // ===== باليت موحّدة مع باقي الشاشات (نفس منطق tasbih.tsx) =====
@@ -90,6 +95,14 @@ export default function DalilScreen() {
     getHistory().then(setHistory);
   }, []);
 
+  // يحدّث المرجع المعروض كل ما ترجع لهذي الشاشة - يحل مشكلة بقاء الاسم القديم
+  // بعد تغيير المرجع من شاشة الإعدادات (الشاشة ما تنعاد mount بس تستعيد التركيز)
+  useFocusEffect(
+    useCallback(() => {
+      getSelectedMarja().then((m) => { if (m) setMarja(m); });
+    }, [])
+  );
+
   // تأثير الكتابة التدريجية - يوقف نفسه لو تغيّر الجواب بسرعة (تحسين أداء)
   useEffect(() => {
     if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
@@ -121,6 +134,16 @@ export default function DalilScreen() {
     await setSelectedMarja(m);
     setMarja(m);
     setShowPicker(false);
+  };
+
+  // إذا المستخدم فرّغ صندوق السؤال بالكامل، نخفي الجواب القديم معه -
+  // يبقى معلّق فقط طول ما السؤال المرتبط فيه موجود بالصندوق
+  const handleQuestionChange = (text: string) => {
+    setQuestion(text);
+    if (text.trim().length === 0 && answer) {
+      setAnswer('');
+      setIsError(false);
+    }
   };
 
   const handleAsk = async () => {
@@ -193,7 +216,12 @@ export default function DalilScreen() {
             <Text style={styles.pickerSub}>مساعدك الديني الشيعي الإمامي</Text>
             <View style={styles.divider} />
             <Text style={styles.pickerQ}>اختر مرجعك الكريم</Text>
-            <Text style={styles.pickerHint}>لا يمكن تغييره إلا من الإعدادات</Text>
+
+            {marja && (
+              <TouchableOpacity onPress={() => setShowPicker(false)} style={styles.pickerCloseBtn} activeOpacity={0.7}>
+                <Ionicons name="close" size={16} color={C.white} />
+              </TouchableOpacity>
+            )}
 
             <ScrollView showsVerticalScrollIndicator={false} style={{ width: '100%' }}>
               {MARJAS.map((m) => {
@@ -205,10 +233,20 @@ export default function DalilScreen() {
                     onPress={() => handleSelectMarja(m.id)}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.marjaEmoji}>{m.emoji}</Text>
+                    <BlurView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+                    {info.image ? (
+                      <Image source={info.image} style={styles.marjaBtnAvatar} resizeMode="cover" />
+                    ) : (
+                      <View style={[styles.marjaBtnAvatarFallback, { borderColor: info.color }]}>
+                        <Ionicons name="person-outline" size={22} color={info.color} />
+                      </View>
+                    )}
                     <View style={styles.marjaTextBox}>
                       <Text style={[styles.marjaName, { color: info.color }]}>{info.name}</Text>
-                      <Text style={styles.marjaLocation}>📍 {info.location}</Text>
+                      <View style={styles.marjaLocationRow}>
+                        <Ionicons name="location-outline" size={11} color={C.muted} />
+                        <Text style={styles.marjaLocation}>{info.location}</Text>
+                      </View>
                     </View>
                   </TouchableOpacity>
                 );
@@ -224,12 +262,27 @@ export default function DalilScreen() {
         <View style={{ width: 60 }} />
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>المجيب</Text>
-          {marjaInfo && (
-            <Text style={[styles.headerMarja, { color: marjaInfo.color }]}>{marjaInfo.name}</Text>
-          )}
         </View>
         <View style={{ width: 60 }} />
       </View>
+
+      {/* اختيار المرجع - مرتب وظاهر بصورته، بدون الحاجة للرجوع للإعدادات */}
+      <TouchableOpacity
+        style={[styles.marjaBar, { borderColor: accentColor }]}
+        onPress={() => setShowPicker(true)}
+        activeOpacity={0.8}
+      >
+        {marjaInfo?.image && (
+          <Image source={marjaInfo.image} style={styles.marjaBarAvatar} resizeMode="cover" />
+        )}
+        <View style={styles.marjaBarTextBox}>
+          <Text style={styles.marjaBarLabel}>المرجع المختار</Text>
+          <Text style={[styles.marjaBarName, { color: accentColor }]}>
+            {marjaInfo?.name ?? 'اختر مرجعاً'}
+          </Text>
+        </View>
+        <Ionicons name="chevron-back" size={20} color={C.muted} />
+      </TouchableOpacity>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -253,7 +306,7 @@ export default function DalilScreen() {
           placeholder="اكتب سؤالك الديني هنا..."
           placeholderTextColor={C.muted}
           value={question}
-          onChangeText={setQuestion}
+          onChangeText={handleQuestionChange}
           multiline
           textAlign="right"
         />
@@ -278,9 +331,16 @@ export default function DalilScreen() {
             style={[styles.answerBox, isError && styles.answerBoxError]}
           >
             <View style={styles.answerHeader}>
-              <Text style={[styles.answerLabel, isError && styles.answerLabelError]}>
-                {isError ? '⚠️ تنبيه' : '📿 الجواب'}
-              </Text>
+              <View style={styles.answerLabelRow}>
+                <Ionicons
+                  name={isError ? 'warning-outline' : 'sparkles-outline'}
+                  size={16}
+                  color={isError ? C.error : C.neonBlue}
+                />
+                <Text style={[styles.answerLabel, isError && styles.answerLabelError]}>
+                  {isError ? 'تنبيه' : 'الجواب'}
+                </Text>
+              </View>
               {!isError && marjaInfo && (
                 <Text style={[styles.answerMarja, { color: marjaInfo.color }]}>
                   وفق {marjaInfo.short}
@@ -295,18 +355,23 @@ export default function DalilScreen() {
 
             {!isError && !isTyping && answer.length > 0 && (
               <View style={styles.answerActions}>
-                <TouchableOpacity style={styles.actionBtn} onPress={handleCopy} activeOpacity={0.7}>
-                  <Text style={styles.actionBtnText}>{copied ? '✅ تم النسخ' : '📋 نسخ'}</Text>
+                <TouchableOpacity style={[styles.actionBtn, styles.actionBtnRow]} onPress={handleCopy} activeOpacity={0.7}>
+                  <Ionicons name={copied ? 'checkmark-circle' : 'copy-outline'} size={14} color={copied ? '#4ade80' : C.white} />
+                  <Text style={[styles.actionBtnText, copied && { color: '#4ade80' }]}>{copied ? 'تم النسخ' : 'نسخ'}</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.actionBtn} onPress={handleShare} activeOpacity={0.7}>
-                  <Text style={styles.actionBtnText}>↗️ مشاركة</Text>
+                <TouchableOpacity style={[styles.actionBtn, styles.actionBtnRow]} onPress={handleShare} activeOpacity={0.7}>
+                  <Ionicons name="share-social-outline" size={14} color={C.white} />
+                  <Text style={styles.actionBtnText}>مشاركة</Text>
                 </TouchableOpacity>
               </View>
             )}
 
             {!isError && !isTyping && marjaInfo && (
               <View style={styles.sourcesBox}>
-                <Text style={styles.sourcesLabel}>📚 المصادر المعتمدة</Text>
+                <View style={styles.sourcesLabelRow}>
+                  <Ionicons name="library-outline" size={13} color="#c9a84c" />
+                  <Text style={styles.sourcesLabel}>المصادر المعتمدة</Text>
+                </View>
                 <Text style={styles.sourcesText}>{marjaInfo.sources}</Text>
               </View>
             )}
@@ -329,7 +394,7 @@ export default function DalilScreen() {
                 onPress={() => handleHistoryTap(h)}
                 activeOpacity={0.8}
               >
-                <Text style={styles.historyArrow}>‹</Text>
+                <Ionicons name="chevron-back" size={16} color={C.neonBlue} />
                 <Text style={styles.historyQ} numberOfLines={2}>
                   {h.q}
                 </Text>
@@ -408,12 +473,22 @@ function createStyles(scale: number) {
       borderRadius: 12,
       padding: 12,
       marginBottom: 8,
-      backgroundColor: C.glass,
+      overflow: 'hidden',
       gap: 10,
     },
-    marjaEmoji: { fontSize: 24 },
+    marjaBtnAvatar: {
+      width: 44, height: 44, borderRadius: 22,
+      backgroundColor: 'rgba(0,0,0,0.2)',
+    },
+    marjaBtnAvatarFallback: {
+      width: 44, height: 44, borderRadius: 22,
+      borderWidth: 1.5,
+      backgroundColor: 'rgba(0,0,0,0.2)',
+      alignItems: 'center', justifyContent: 'center',
+    },
     marjaTextBox: { flex: 1 },
-    marjaName: { fontSize: 15 * scale, fontWeight: '700', marginBottom: 2 },
+    marjaName: { fontSize: 15 * scale, fontWeight: '700', marginBottom: 2, textAlign: 'right' },
+    marjaLocationRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 4 },
     marjaLocation: { color: C.muted, fontSize: 11 * scale },
 
     header: {
@@ -430,6 +505,38 @@ function createStyles(scale: number) {
     headerTitle: { color: C.white, fontSize: 18 * scale, fontWeight: 'bold' },
     headerMarja: { fontSize: 11 * scale, marginTop: 2 },
 
+    marjaBar: {
+      flexDirection: 'row-reverse',
+      alignItems: 'center',
+      gap: 10,
+      marginHorizontal: 16,
+      marginTop: 12,
+      backgroundColor: C.glass,
+      borderWidth: 1.5,
+      borderRadius: 14,
+      padding: 10,
+    },
+    marjaBarAvatar: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: 'rgba(0,0,0,0.2)',
+    },
+    marjaBarTextBox: { flex: 1 },
+    marjaBarLabel: { color: C.muted, fontSize: 10 * scale, textAlign: 'right', marginBottom: 2 },
+    marjaBarName: { fontSize: 15 * scale, fontWeight: '700', textAlign: 'right' },
+
+    pickerCloseBtn: {
+      position: 'absolute',
+      top: 14,
+      left: 14,
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      backgroundColor: 'rgba(255,255,255,0.12)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     content: { padding: 16 },
 
     emptyState: {
@@ -483,6 +590,7 @@ function createStyles(scale: number) {
       alignItems: 'center',
       marginBottom: 10,
     },
+    answerLabelRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
     answerLabel: { color: C.neonBlue, fontSize: 15 * scale, fontWeight: 'bold' },
     answerLabelError: { color: C.error },
     answerMarja: { fontSize: 12 * scale, fontWeight: '600' },
@@ -503,6 +611,7 @@ function createStyles(scale: number) {
       paddingVertical: 8,
       paddingHorizontal: 14,
     },
+    actionBtnRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 5 },
     actionBtnText: { color: C.white, fontSize: 12 * scale, fontWeight: '600' },
 
     sourcesBox: {
@@ -513,7 +622,8 @@ function createStyles(scale: number) {
       borderWidth: 1,
       borderColor: C.glassBorder,
     },
-    sourcesLabel: { color: '#c9a84c', fontSize: 12 * scale, fontWeight: '700', marginBottom: 4, textAlign: 'right' },
+    sourcesLabelRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 5, marginBottom: 4 },
+    sourcesLabel: { color: '#c9a84c', fontSize: 12 * scale, fontWeight: '700', textAlign: 'right' },
     sourcesText: { color: C.muted, fontSize: 11 * scale, textAlign: 'right', lineHeight: 18 * scale },
 
     historySection: { marginTop: 10 },
@@ -536,7 +646,6 @@ function createStyles(scale: number) {
       borderWidth: 1,
       borderColor: C.glassBorder,
     },
-    historyArrow: { color: C.neonBlue, fontSize: 18 * scale, fontWeight: 'bold' },
     historyQ: { flex: 1, color: '#889aaa', fontSize: 14 * scale, textAlign: 'right' },
   });
 }

@@ -22,9 +22,9 @@ const light = {
   card: '#ffffff',
   blue: '#1f6fa8',
   muted: '#4f7186',
-  gold: '#330d79',
+  gold: '#B8860B',
   green: '#1f7a45',
-  white: '#130d0d',
+  white: '#ffffff',
   text: '#13202b',
   background: '#6fabd1',
   backgroundElement: '#ffffff',
@@ -33,8 +33,6 @@ const light = {
 };
 
 export const Colors = { light, dark };
-
-export const COLORS = dark;
 
 export type ThemeColor = keyof typeof dark;
 

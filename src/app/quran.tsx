@@ -1,10 +1,15 @@
-import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BlurView } from 'expo-blur';
-import * as Clipboard from 'expo-clipboard';
 import { useFonts } from 'expo-font';
-import { useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BlurView } from 'expo-blur';
+import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
+import {
+  BackgroundId,
+  getSavedBackgroundId,
+  getSelectedBackground,
+} from '../utils/backgroundSettings';
 import {
   ActivityIndicator,
   Dimensions,
@@ -21,13 +26,9 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
-import {
-  BackgroundId,
-  getSavedBackgroundId,
-  getSelectedBackground,
-} from '../utils/backgroundSettings';
 
 interface Verse {
   id: number;
@@ -49,14 +50,10 @@ interface JuzSection {
   surahs: Array<{ id: number; name: string; verses: string }>;
 }
 
-interface Bookmark {
-  surahId: number;
-  verseId: number;
-}
-
 interface LastPosition {
   surahId: number;
   surahName: string;
+  verseId?: number;
 }
 
 const JUZ_START_POINTS = [
@@ -89,7 +86,33 @@ const JUZ_NAMES = [
 const BISMILLAH = 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ';
 // سورة التوبة (٩) الوحيدة التي لا تبدأ بالبسملة
 // سورة التوبة (٩) لا تبدأ بالبسملة، وسورة الفاتحة (١) آيتها الأولى هي نفسها البسملة
+// سورة التوبة فقط بلا بسملة؛ كل باقي السور (وفيهم الفاتحة) تظهر البسملة كلافتة قبل أول آية
 const NO_BISMILLAH_SURAHS = [9];
+
+// مواضع السجدة الـ 15 بالقرآن (رواية حفص) — obligatory: true تعني سجدة واجبة (٣٢، ٤١، ٥٣، ٩٦)
+const SAJDA_VERSES: { surah: number; verse: number; obligatory: boolean }[] = [
+  { surah: 7, verse: 206, obligatory: false },
+  { surah: 13, verse: 15, obligatory: false },
+  { surah: 16, verse: 50, obligatory: false },
+  { surah: 17, verse: 109, obligatory: false },
+  { surah: 19, verse: 58, obligatory: false },
+  { surah: 22, verse: 18, obligatory: false },
+  { surah: 22, verse: 77, obligatory: false },
+  { surah: 25, verse: 60, obligatory: false },
+  { surah: 27, verse: 26, obligatory: false },
+  { surah: 32, verse: 15, obligatory: true },
+  { surah: 38, verse: 24, obligatory: false },
+  { surah: 41, verse: 38, obligatory: true },
+  { surah: 53, verse: 62, obligatory: true },
+  { surah: 84, verse: 21, obligatory: false },
+  { surah: 96, verse: 19, obligatory: true },
+];
+
+const isSajdaVerse = (surahId: number, verseId: number) =>
+  SAJDA_VERSES.some((s) => s.surah === surahId && s.verse === verseId);
+
+const isObligatorySajda = (surahId: number, verseId: number) =>
+  SAJDA_VERSES.some((s) => s.surah === surahId && s.verse === verseId && s.obligatory);
 
 // إيجاد اسم الجزء الذي تبدأ فيه سورة معيّنة (تقريب على مستوى السورة - احتياطي فقط)
 function getJuzNameForSurah(surahId: number): string {
@@ -139,12 +162,16 @@ function buildAllPages(surahs: Surah[]): TaggedVerse[][] {
   return pages;
 }
 
-const SCREEN_WIDTH = Dimensions.get('window').width;
-const BOOKMARKS_KEY = 'quran_bookmarks';
+// توسيم كل آيات سورة وحدة بمعلومات السورة - يُستخدم بوضع القراءة المتصل (سكرول واحد للسورة كاملة)
+function tagSurahVerses(surah: Surah): TaggedVerse[] {
+  return surah.verses.map((v) => ({ ...v, surahId: surah.id, surahName: surah.name }));
+}
+
 const FONT_SIZE_KEY = 'quran_font_size_v2';
 const FONT_FAMILY_KEY = 'quran_font_family_v2';
 const TASHKEEL_KEY = 'quran_show_tashkeel';
 const LAST_POSITION_KEY = 'quran_last_position';
+const READER_VIEW_MODE_KEY = 'quran_reader_view_mode';
 const STATS_KEY = 'quran_stats';
 const READING_BG_KEY = 'quran_reading_background_id';
 const ONBOARDING_KEY = 'quran_onboarding_seen';
@@ -161,13 +188,33 @@ const C = {
   glassDark: 'rgba(0,0,0,0.28)',
 };
 
-const neonGlowShadow = {
-  shadowColor: C.neonBlue,
-  shadowOpacity: 0.35,
-  shadowRadius: 8,
-  shadowOffset: { width: 0, height: 0 },
-  elevation: 4,
-};
+// ظل زجاجي نيوني متوافق بين iOS وأندرويد - على أندرويد shadowColor ما ينقرا مع elevation
+// فنعتمد فوق أندرويد على إضاءة داخلية خفيفة عبر borderColor أوضح بدل ظل elevation رمادي نشاز
+// شدة تأثير الضبابية (BlurView) ثقيلة على أداء أندرويد بالذات - نخففها هناك بدون ما نأثر على شكلها بـ iOS
+const blurIntensity = (base: number) => (Platform.OS === 'android' ? Math.round(base * 0.5) : base);
+
+// SafeAreaView الأساسية من react-native ما تحسب مساحة شريط الحالة على أندرويد (تشتغل صح بـ iOS بس)
+// فبدونها المحتوى يطلع ملازق بشريط الحالة وكأنه ملء شاشة كامل - نعوضها يدوياً بمسافة فوق على أندرويد
+const ANDROID_STATUS_BAR_PADDING = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0;
+
+const neonGlowShadow = Platform.select({
+  ios: {
+    shadowColor: C.neonBlue,
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  android: {
+    borderColor: 'rgba(87,200,242,0.55)',
+  },
+  default: {
+    shadowColor: C.neonBlue,
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
+  },
+}) as object;
 
 // أحجام الخط
 const FONT_SIZES: { [key: string]: number } = { small: 18, medium: 24, large: 30 };
@@ -179,7 +226,7 @@ const READING_BACKGROUNDS = [
   { id: 'bg_03', label: 'خلفية 3', color: '#000814', overlayOpacity: 0.6, image: require('../assets/backgrounds/bg_03.jpg') },
   { id: 'bg_04', label: 'خلفية 4', color: '#0a2430', overlayOpacity: 0.55, image: require('../assets/backgrounds/bg_04.jpg') },
   { id: 'bg_05', label: 'خلفية 5', color: '#3a0a0a', overlayOpacity: 0.6, image: require('../assets/backgrounds/bg_05.jpg') },
-  { id: 'main_bg_01', label: 'القبة النيونية', color: '#0d1420', overlayOpacity: 0.45, image: require('../assets/backgrounds/main_bg_01.jpg') },
+  { id: 'main_bg_01', label: 'رصاصي ', color: '#0d1420', overlayOpacity: 0.45, image: require('../assets/backgrounds/main_bg_01.jpg') },
   { id: 'main_bg_02', label: 'المحراب الذهبي', color: '#12141c', overlayOpacity: 0.4, image: require('../assets/backgrounds/main_bg_02.jpg') },
   { id: 'main_bg_03', label: 'فسيفساء رمادية', color: '#1a1a1a', overlayOpacity: 0.55, image: require('../assets/backgrounds/main_bg_03.jpg') },
 ];
@@ -187,20 +234,269 @@ const READING_BACKGROUNDS = [
 // إزالة رموز التشكيل من النص العربي
 const stripTashkeel = (text: string) => text.replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, '');
 
-// سورة الفاتحة: آيتها الأولى هي نص البسملة نفسه، وبما أننا نعرض البسملة كعنوان منفصل
-// نشيل تكرارها من بداية نص الآية الأولى فقط لهذي السورة
-const getVerseDisplayText = (verse: { surahId: number; id: number; text: string }) => {
-  if (verse.surahId === 1 && verse.id === 0) {
-    const words = verse.text.trim().split(/\s+/);
-    return words.slice(4).join(' ');
+// تحويل رقم الآية لأرقام عربية-هندية (٠-٩) بدل الأرقام الإنكليزية
+const ARABIC_INDIC_DIGITS = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+const toArabicDigits = (num: number) => String(num).replace(/[0-9]/g, (d) => ARABIC_INDIC_DIGITS[Number(d)]);
+
+// نعرض نص الآية كما هو دائماً بدون أي حذف أو قص - أي تعديل هنا معرض لحذف أول آية بالسورة
+const getVerseDisplayText = (verse: { surahId: number; id: number; text: string }) => verse.text;
+
+// لافتة اسم السورة الموحّدة - بنفس هوية التطبيق الزجاجية النيونية، تُستخدم بأعلى كل صفحة
+// وفي منتصف الصفحة إذا بدأت سورة جديدة هناك، حتى يكون الشكل متناسق بكل مكان
+const SurahBanner = memo(function SurahBanner({
+  surahId,
+  surahName,
+  activeFontFamily,
+}: {
+  surahId: number;
+  surahName: string;
+  activeFontFamily: string | undefined;
+}) {
+  return (
+    <View style={styles.surahBannerFixed}>
+      <View style={styles.surahBannerRow}>
+        <View style={styles.surahBannerLine} />
+        <Ionicons name="sparkles" size={13} color="#57C8F2" style={styles.surahBannerIcon} />
+        <Text style={styles.surahHeaderArabic}>{'سورة ' + surahName}</Text>
+        <Ionicons name="sparkles" size={13} color="#57C8F2" style={styles.surahBannerIcon} />
+        <View style={styles.surahBannerLine} />
+      </View>
+      {!NO_BISMILLAH_SURAHS.includes(surahId) && (
+        <Text style={[styles.bismillah, { fontFamily: activeFontFamily }]}>{BISMILLAH}</Text>
+      )}
+    </View>
+  );
+});
+
+// تقسيم آيات الصفحة إلى مقاطع: نص متصل، أو لافتة بداية سورة جديدة (لعرضها بشكل موحّد بمنتصف الصفحة أيضاً)
+function buildPageSegments(pageVerses: TaggedVerse[]) {
+  const segments: Array<
+    { type: 'banner'; surahId: number; surahName: string } | { type: 'verses'; verses: TaggedVerse[] }
+  > = [];
+  let group: TaggedVerse[] = [];
+  pageVerses.forEach((verse, idx) => {
+    if (verse.id === 1 && idx !== 0) {
+      if (group.length) segments.push({ type: 'verses', verses: group });
+      group = [];
+      segments.push({ type: 'banner', surahId: verse.surahId, surahName: verse.surahName });
+    }
+    group.push(verse);
+  });
+  if (group.length) segments.push({ type: 'verses', verses: group });
+  return segments;
+}
+
+// القارئ المتصل: يعرض كل آيات السورة المفتوحة بقائمة عمودية واحدة (بدون تقسيم صفحات)
+// يشتغل بنفس الطريقة على الموبايل والتابلت والمتصفح (لمس، عجلة الماوس، تراك باد)
+const ContinuousReader = memo(function ContinuousReader({
+  verses,
+  activeFontFamily,
+  fontSize,
+  showTashkeel,
+  setShareVerse,
+  listRef,
+  initialVerseIndex,
+  onPositionChange,
+  autoScrollActive,
+  setAutoScrollActive,
+  autoScrollSpeed,
+  setAutoScrollSpeed,
+  scrollOffsetRef,
+  jumpSignal,
+  jumpTargetVerseId,
+}: {
+  verses: TaggedVerse[];
+  activeFontFamily: string | undefined;
+  fontSize: number;
+  showTashkeel: boolean;
+  setShareVerse: (v: { surahName: string; verseId: number; text: string } | null) => void;
+listRef: React.RefObject<ScrollView | null>;
+initialVerseIndex: number;
+onPositionChange: (verseId: number) => void;
+  autoScrollActive: boolean;
+  setAutoScrollActive: (v: boolean) => void;
+  autoScrollSpeed: 'slow' | 'medium' | 'fast';
+  setAutoScrollSpeed: (v: 'slow' | 'medium' | 'fast') => void;
+  scrollOffsetRef: React.MutableRefObject<number>;
+  jumpSignal: number;
+  jumpTargetVerseId: number;
+}) {
+  const contentHeightRef = useRef(0);
+  const containerHeightRef = useRef(0);
+  const lastPositionUpdateRef = useRef(0);
+  const didInitialScrollRef = useRef(false);
+  const currentSurahIdRef = useRef<number | undefined>(undefined);
+
+  if (verses[0]?.surahId !== currentSurahIdRef.current) {
+    currentSurahIdRef.current = verses[0]?.surahId;
+    didInitialScrollRef.current = false;
   }
-  return verse.text;
-};
+
+  // نحسب رقم الآية التقريبي المعروض حالياً حسب نسبة التمرير (بدون تقطيع النص لعناصر منفصلة)
+  const reportApproxPosition = (offsetY: number) => {
+    const scrollable = Math.max(1, contentHeightRef.current - containerHeightRef.current);
+    const ratio = Math.min(1, Math.max(0, offsetY / scrollable));
+    const idx = Math.round(ratio * (verses.length - 1));
+    const verse = verses[idx];
+    if (verse) onPositionChange(verse.id);
+  };
+
+  const handleContentSizeChange = (_w: number, h: number) => {
+    contentHeightRef.current = h;
+    // نقفز لموضع القراءة المحفوظ (مرة وحدة بس عند فتح السورة) بمجرد ما نعرف طول المحتوى
+    if (!didInitialScrollRef.current && initialVerseIndex > 0 && h > 0) {
+      didInitialScrollRef.current = true;
+      const targetY = (initialVerseIndex / Math.max(1, verses.length)) * h;
+      setTimeout(() => listRef.current?.scrollTo({ y: targetY, animated: false }), 30);
+    }
+  };
+
+  // القفز اليدوي لموضع معين (زر "آخر موضع توقفت فيه") - يشتغل حتى لو إحنا أصلاً بنفس السورة
+  useEffect(() => {
+    if (jumpSignal === 0) return; // القيمة الابتدائية، تجاهل
+    const idx = verses.findIndex((v) => v.id === jumpTargetVerseId);
+    if (idx < 0) return;
+    const h = contentHeightRef.current;
+    if (h > 0) {
+      const targetY = (idx / Math.max(1, verses.length)) * h;
+      listRef.current?.scrollTo({ y: targetY, animated: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpSignal]);
+
+  // التمرير التلقائي - إصلاح مهم: كان يحرك مسافة *ثابتة* كل نبضة setInterval (كل ٣٠
+  // مللي ثانية بالضبط افتراضياً)، بس لو الخيط الرئيسي (JS thread) انشغل لحظة (رندر آية،
+  // لمسة، إلخ) والنبضة تأخرت فعلياً، الكود كان يتحرك نفس المسافة رغم إنه مرّ وقت أطول -
+  // هذا بالضبط يسبب الإحساس بالتقطيع (يوقف-يتحرك-يوقف). الحل: نحسب المسافة حسب الزمن
+  // الفعلي المنقضي (delta time) عبر requestAnimationFrame بدل setInterval، فالحركة تضل
+  // ناعمة ومتناسبة مع الزمن الحقيقي حتى لو توقيت النبضات نفسه مو منتظم ١٠٠٪.
+  useEffect(() => {
+    if (!autoScrollActive) return;
+    const pxPerMs = (autoScrollSpeed === 'slow' ? 0.5 : autoScrollSpeed === 'fast' ? 2.2 : 1.1) / 30;
+    let rafId: number;
+    let lastTs = 0;
+    const tick = (ts: number) => {
+      if (!lastTs) lastTs = ts;
+      const dt = ts - lastTs;
+      lastTs = ts;
+      const scrollable = Math.max(0, contentHeightRef.current - containerHeightRef.current);
+      const next = Math.min(scrollable, scrollOffsetRef.current + pxPerMs * dt);
+      scrollOffsetRef.current = next;
+      listRef.current?.scrollTo({ y: next, animated: false });
+      // نفس منطق الـ throttle المستخدم بالتمرير اليدوي (٤٠٠ ملي) - بدونه كانت
+      // reportApproxPosition (وبالتالي setLastPosition + كتابة AsyncStorage) تنستدعى
+      // كل فريم (٦٠ مرة/ثانية) طول مدة التمرير التلقائي، وهذا يسبب إعادة ريندر
+      // وكتابة تخزين مفرطة تحس متل تقطيع، خصوصاً بسور طويلة
+      const now = Date.now();
+      if (now - lastPositionUpdateRef.current > 400) {
+        lastPositionUpdateRef.current = now;
+        reportApproxPosition(next);
+      }
+      if (next >= scrollable) { setAutoScrollActive(false); return; }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [autoScrollActive, autoScrollSpeed, verses.length]);
+
+  const speedLabel = autoScrollSpeed === 'slow' ? 'بطيء' : autoScrollSpeed === 'fast' ? 'سريع' : 'متوسط';
+
+  return (
+    <View style={{ flex: 1 }} onLayout={(e) => { containerHeightRef.current = e.nativeEvent.layout.height; }}>
+      <View style={styles.versesPanelBg} pointerEvents="none" />
+      <ScrollView
+        ref={listRef}
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.continuousContent}
+        showsVerticalScrollIndicator={false}
+        onContentSizeChange={handleContentSizeChange}
+        onScroll={(e) => {
+          const y = e.nativeEvent.contentOffset.y;
+          scrollOffsetRef.current = y;
+          const now = Date.now();
+          if (now - lastPositionUpdateRef.current > 400) {
+            lastPositionUpdateRef.current = now;
+            reportApproxPosition(y);
+          }
+        }}
+        scrollEventThrottle={32}
+        onScrollBeginDrag={() => setAutoScrollActive(false)}
+      >
+        {verses[0] && (
+          <SurahBanner surahId={verses[0].surahId} surahName={verses[0].surahName} activeFontFamily={activeFontFamily} />
+        )}
+
+        {/* نص السورة كاملاً كفقرة واحدة متدفقة ومحاذاة مصحفية - مو كل آية سطر منفصل */}
+        <Text style={styles.versesFlow}>
+          {verses.map((verse) => (
+            <Text key={`${verse.surahId}-${verse.id}`}>
+              <Text style={[styles.verseText, { fontSize, fontFamily: activeFontFamily }]}>
+                {showTashkeel ? getVerseDisplayText(verse) : stripTashkeel(getVerseDisplayText(verse))}
+              </Text>
+              <Text
+                style={styles.verseNumberInline}
+                onLongPress={() => setShareVerse({ surahName: verse.surahName, verseId: verse.id, text: verse.text })}
+              >
+                {' '}{'﴿'}{toArabicDigits(verse.id)}{'﴾'}{' '}
+              </Text>
+              {isSajdaVerse(verse.surahId, verse.id) && (
+                <Text
+                  style={[
+                    styles.sajdaMark,
+                    isObligatorySajda(verse.surahId, verse.id) && styles.sajdaMarkObligatory,
+                  ]}
+                >
+                  {' '}۩{' '}
+                </Text>
+              )}
+              {verse.surahId === 114 && verse.id === 6 && (
+                <Text style={styles.khatmDua}>
+                  {'\n\n'}«صَدَقَ اللَّهُ العَظِيمُ»{'\n\n'}
+                  اللَّهُمَّ ارْحَمْنَا بِالقُرْآنِ، وَاجْعَلْهُ لَنَا إِمَامًا وَنُورًا وَهُدًى وَرَحْمَةً،{'\n'}
+                  اللَّهُمَّ ذَكِّرْنَا مِنْهُ مَا نُسِّينَا، وَعَلِّمْنَا مِنْهُ مَا جَهِلْنَا،{'\n'}
+                  وَارْزُقْنَا تِلَاوَتَهُ آنَاءَ اللَّيْلِ وَأَطْرَافَ النَّهَارِ،{'\n'}
+                  وَاجْعَلْهُ لَنَا حُجَّةً يَا رَبَّ العَالَمِينَ،{'\n'}
+                  وَتَقَبَّلْ مِنَّا هَذِهِ الخَتْمَةَ المُبَارَكَةَ، آمِين.
+                </Text>
+              )}
+            </Text>
+          ))}
+        </Text>
+
+        <View style={{ height: 90 }} />
+      </ScrollView>
+
+      {/* زر التمرير التلقائي البطيء - عائم بأسفل الشاشة */}
+      <View style={styles.autoScrollDock} pointerEvents="box-none">
+        <TouchableOpacity
+          style={styles.autoScrollBtn}
+          activeOpacity={0.8}
+          onPress={() => setAutoScrollActive(!autoScrollActive)}
+        >
+          <Ionicons name={autoScrollActive ? 'pause' : 'play'} size={18} color="#fff" />
+        </TouchableOpacity>
+        {autoScrollActive && (
+          <TouchableOpacity
+            style={styles.autoScrollSpeedBtn}
+            activeOpacity={0.8}
+            onPress={() =>
+              setAutoScrollSpeed(autoScrollSpeed === 'slow' ? 'medium' : autoScrollSpeed === 'medium' ? 'fast' : 'slow')
+            }
+          >
+            <Text style={styles.autoScrollSpeedText}>{speedLabel}</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+});
 
 export default function QuranScreen() {
   const [fontsLoaded] = useFonts({
     'Amiri-Regular': require('../assets/fonts/Amiri-Regular.ttf'),
     'Amiri-Bold': require('../assets/fonts/Amiri-Bold.ttf'),
+    // خط الرسم العثماني (خط حفص الشائع بمصاحف السعودية/مجمع الملك فهد) - ضيف الملف بنفس هذا الاسم بمجلد الخطوط
+    'UthmanicHafs': require('../assets/fonts/UthmanicHafs.ttf'),
   });
   const [surahs, setSurahs] = useState<Surah[]>([]);
   const [activeTab, setActiveTab] = useState(0);
@@ -209,12 +505,13 @@ export default function QuranScreen() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [fontSizeKey, setFontSizeKey] = useState<'small' | 'medium' | 'large'>('medium');
-  const [fontFamilyChoice, setFontFamilyChoice] = useState<'amiri' | 'system'>('amiri');
+  const [fontFamilyChoice, setFontFamilyChoice] = useState<'uthmani' | 'amiri' | 'system'>('uthmani');
   const [showTashkeel, setShowTashkeel] = useState(true);
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [lastPosition, setLastPosition] = useState<LastPosition | null>(null);
   const [todayCount, setTodayCount] = useState(0);
-  const [showBookmarks, setShowBookmarks] = useState(false);
+  // مجموعة أرقام السور الفريدة اللي انفتحت اليوم - نعتمد عليها نحسب العدد الصحيح
+  // بدل ما نزيد رقم بسيط بكل فتحة سورة (حتى لو نفس السورة انفتحت أكثر من مرة)
+  const todaySurahIdsRef = useRef<Set<number>>(new Set());
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [readingMode, setReadingMode] = useState(false);
 
@@ -222,6 +519,13 @@ export default function QuranScreen() {
   const [sharedBgId, setSharedBgId] = useState<BackgroundId>('quran');
   const [showSettings, setShowSettings] = useState(false);
   const [showBgPicker, setShowBgPicker] = useState(false);
+
+  // رابط خارجي (إشعار آية بعد الصلاة، أو زر "سورة الجمعة" بجرد أعمال يوم
+  // الجمعة) يوصل هذي الشاشة بمعطيات ?surah=X&ayah=Y - نفتح السورة تلقائياً
+  // عليهن أول ما تنحمل قائمة السور (تحت بمعالج مستقل، مو هنا مباشرة، لأن
+  // surahs لسه فاضية بهذا السطر بالتشغيل الأول)
+  const deepLinkParams = useLocalSearchParams<{ surah?: string; ayah?: string }>();
+  const handledDeepLinkRef = useRef(false);
 
   // بحث داخل نص الآيات
   const [showVerseSearch, setShowVerseSearch] = useState(false);
@@ -238,15 +542,53 @@ export default function QuranScreen() {
   // تقدم القراءة داخل السورة
   const [readProgress, setReadProgress] = useState(0);
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  // طريقة عرض القراءة: صفحات مصحف مقسّمة، أو سكرول متصل لكل السورة دفعة وحدة
+  const [readerViewMode, setReaderViewMode] = useState<'pages' | 'continuous'>('pages');
+  const [autoScrollActive, setAutoScrollActive] = useState(false);
+  const [autoScrollSpeed, setAutoScrollSpeed] = useState<'slow' | 'medium' | 'fast'>('medium');
+  const continuousListRef = useRef<ScrollView>(null);
+  const continuousScrollOffsetRef = useRef(0);
   const readerListRef = useRef<FlatList>(null);
   const [readerAreaHeight, setReaderAreaHeight] = useState(0);
+  const [continuousVerseId, setContinuousVerseId] = useState(1);
+  // إشارة قفز يدوية (تزيد رقمها كل مرة نريد نجبر القراءة المتصلة تقفز لموضع معين، حتى لو نفس السورة)
+  const [continuousJumpSignal, setContinuousJumpSignal] = useState(0);
+  // عرض الشاشة الفعلي بشكل تفاعلي (يتحدث تلقائياً عند تغيير حجم نافذة المتصفح)
+  const { width: pageWidth } = useWindowDimensions();
+  // مراجع التمرير العمودي لكل صفحة + آخر إزاحة تمرير معروفة (لدعم أسهم لوحة المفاتيح على الويب)
+  const pageScrollRefs = useRef<Map<number, ScrollView>>(new Map());
+  const pageScrollOffsets = useRef<Map<number, number>>(new Map());
 
-  const allPages = useMemo(() => buildAllPages(surahs), [surahs]);
+  // صفحات المصحف الكاملة (٦٠٤ صفحة) - نبنيها مرة وحدة بس أول ما يفتح المستخدم أي سورة (مو فوراً عند فتح قائمة السور)
+  // هذا يخفف الثقل الأولي لأن قائمة السور والأجزاء ما تحتاج هذا البناء الثقيل أصلاً
+  const [allPages, setAllPages] = useState<TaggedVerse[][]>([]);
+  const allPagesRef = useRef<TaggedVerse[][] | null>(null);
+  const ensureAllPages = (): TaggedVerse[][] => {
+    if (allPagesRef.current) return allPagesRef.current;
+    const built = buildAllPages(surahs);
+    allPagesRef.current = built;
+    setAllPages(built);
+    return built;
+  };
+  const currentSurahTaggedVerses = useMemo(
+    () => (selectedSurah ? tagSurahVerses(selectedSurah) : []),
+    [selectedSurah]
+  );
+
+  // إعادة محاذاة الصفحة الحالية كل ما يتغيّر عرض النافذة (مثلاً عند تغيير حجم المتصفح أو محاكي الهاتف)
+  useEffect(() => {
+    if (!selectedSurah) return;
+    const t = setTimeout(() => {
+      readerListRef.current?.scrollToIndex({ index: currentPageIndex, animated: false });
+    }, 30);
+    return () => clearTimeout(t);
+  }, [pageWidth]);
 
   const readingBg = READING_BACKGROUNDS.find((b) => b.id === readingBgId) ?? READING_BACKGROUNDS[0];
   const sharedBg = getSelectedBackground(sharedBgId);
   const fontSize = FONT_SIZES[fontSizeKey];
-  const activeFontFamily = fontFamilyChoice === 'amiri' ? 'Amiri-Regular' : undefined;
+  const activeFontFamily =
+    fontFamilyChoice === 'uthmani' ? 'UthmanicHafs' : fontFamilyChoice === 'amiri' ? 'Amiri-Regular' : undefined;
 
   useEffect(() => {
     try {
@@ -293,14 +635,13 @@ export default function QuranScreen() {
 
   const loadSavedData = async () => {
     try {
-      const savedBookmarks = await AsyncStorage.getItem(BOOKMARKS_KEY);
-      if (savedBookmarks) setBookmarks(JSON.parse(savedBookmarks));
-
       const savedFontSize = await AsyncStorage.getItem(FONT_SIZE_KEY);
       if (savedFontSize && FONT_SIZES[savedFontSize]) setFontSizeKey(savedFontSize as any);
 
       const savedFontFamily = await AsyncStorage.getItem(FONT_FAMILY_KEY);
-      if (savedFontFamily === 'amiri' || savedFontFamily === 'system') setFontFamilyChoice(savedFontFamily);
+      if (savedFontFamily === 'uthmani' || savedFontFamily === 'amiri' || savedFontFamily === 'system') {
+        setFontFamilyChoice(savedFontFamily);
+      }
 
       const savedTashkeel = await AsyncStorage.getItem(TASHKEEL_KEY);
       if (savedTashkeel !== null) setShowTashkeel(savedTashkeel === '1');
@@ -308,11 +649,20 @@ export default function QuranScreen() {
       const savedLastPosition = await AsyncStorage.getItem(LAST_POSITION_KEY);
       if (savedLastPosition) setLastPosition(JSON.parse(savedLastPosition));
 
+      const savedViewMode = await AsyncStorage.getItem(READER_VIEW_MODE_KEY);
+      if (savedViewMode === 'pages' || savedViewMode === 'continuous') setReaderViewMode(savedViewMode);
+
       const savedStats = await AsyncStorage.getItem(STATS_KEY);
       const today = new Date().toISOString().split('T')[0];
       if (savedStats) {
         const stats = JSON.parse(savedStats);
-        setTodayCount(stats.date === today ? stats.count : 0);
+        if (stats.date === today) {
+          // الشكل الجديد: مصفوفة أرقام سور فريدة. الشكل القديم (count رقم فقط) نتجاهله
+          // لأنه ما يميّز السور الفريدة - يبدأ العد من جديد بالشكل الصحيح
+          const ids: number[] = Array.isArray(stats.surahIds) ? stats.surahIds : [];
+          todaySurahIdsRef.current = new Set(ids);
+          setTodayCount(ids.length);
+        }
       }
 
       const savedReadingBg = await AsyncStorage.getItem(READING_BG_KEY);
@@ -325,36 +675,139 @@ export default function QuranScreen() {
     }
   };
 
+  // دعم أسهم الكيبورد أثناء اختبار الشاشة على المتصفح (يمين/يسار لتقليب الصفحة بوضع الصفحات، أعلى/أسفل للتمرير بأي وضع)
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !selectedSurah) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (readerViewMode === 'pages' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const delta = e.key === 'ArrowLeft' ? 1 : -1; // يمين = صفحة سابقة، يسار = صفحة تالية (اتجاه المصحف)
+        const newIndex = Math.min(allPages.length - 1, Math.max(0, currentPageIndex + delta));
+        if (newIndex !== currentPageIndex) {
+          readerListRef.current?.scrollToIndex({ index: newIndex, animated: true });
+          setCurrentPageIndex(newIndex);
+          setReadProgress((newIndex + 1) / Math.max(1, allPages.length));
+        }
+        e.preventDefault();
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (readerViewMode === 'pages') {
+          const ref = pageScrollRefs.current.get(currentPageIndex);
+          if (ref) {
+            const current = pageScrollOffsets.current.get(currentPageIndex) || 0;
+            const next = Math.max(0, current + (e.key === 'ArrowDown' ? 140 : -140));
+            ref.scrollTo({ y: next, animated: true });
+          }
+        } else {
+          const next = Math.max(0, continuousScrollOffsetRef.current + (e.key === 'ArrowDown' ? 140 : -140));
+          continuousScrollOffsetRef.current = next;
+          continuousListRef.current?.scrollTo({ y: next, animated: true });
+        }
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedSurah, currentPageIndex, allPages.length, readerViewMode]);
+
+  const updateContinuousPosition = (verseId: number) => {
+    setContinuousVerseId(verseId);
+  };
+
+  const changeReaderViewMode = async (mode: 'pages' | 'continuous') => {
+    setReaderViewMode(mode);
+    setAutoScrollActive(false);
+    try {
+      await AsyncStorage.setItem(READER_VIEW_MODE_KEY, mode);
+    } catch (error) {
+      console.error('Error saving reader view mode:', error);
+    }
+  };
+
   const openSurah = async (surah: Surah, targetVerseId: number = 1) => {
     setSelectedSurah(surah);
     setReadProgress(0);
+    setAutoScrollActive(false);
+    setContinuousVerseId(targetVerseId);
 
-    // نجيب رقم الصفحة الصحيح بالمصفوفة الشاملة (كل القرآن) حتى تبدأ القراءة من مكانها الصح
+    // نبني صفحات المصحف الآن (أول مرة بس، بعدها محفوظة) - نجيب رقم الصفحة الصحيح حتى تبدأ القراءة من مكانها الصح
+    const pages = ensureAllPages();
     let targetPage = 0;
-    for (let i = 0; i < allPages.length; i++) {
-      if (allPages[i].some((v) => v.surahId === surah.id && v.id === targetVerseId)) {
+    for (let i = 0; i < pages.length; i++) {
+      if (pages[i].some((v) => v.surahId === surah.id && v.id === targetVerseId)) {
         targetPage = i;
         break;
       }
     }
     setCurrentPageIndex(targetPage);
-    // ننتظر رندر الـ FlatList قبل القفز للصفحة المطلوبة
-    setTimeout(() => {
-      readerListRef.current?.scrollToIndex({ index: targetPage, animated: false });
-    }, 50);
-
-    const position: LastPosition = { surahId: surah.id, surahName: surah.name };
-    setLastPosition(position);
+    // ننتظر رندر الـ FlatList قبل القفز للصفحة المطلوبة (بوضع الصفحات فقط؛ الوضع المتصل يتكفل بموضعه لحاله)
+    if (readerViewMode === 'pages') {
+      setTimeout(() => {
+        readerListRef.current?.scrollToIndex({ index: targetPage, animated: false });
+      }, 50);
+    } else {
+      continuousScrollOffsetRef.current = 0;
+      continuousListRef.current?.scrollTo({ y: 0, animated: false });
+    }
 
     try {
-      await AsyncStorage.setItem(LAST_POSITION_KEY, JSON.stringify(position));
-
       const today = new Date().toISOString().split('T')[0];
-      const newCount = todayCount + 1;
+      // إذا التاريخ المحفوظ تغيّر (يوم جديد) نصفّر المجموعة قبل ما نضيف السورة الحالية
+      const savedStatsRaw = await AsyncStorage.getItem(STATS_KEY);
+      if (savedStatsRaw) {
+        const savedStats = JSON.parse(savedStatsRaw);
+        if (savedStats.date !== today) todaySurahIdsRef.current = new Set();
+      }
+      todaySurahIdsRef.current.add(surah.id);
+      const newCount = todaySurahIdsRef.current.size;
       setTodayCount(newCount);
-      await AsyncStorage.setItem(STATS_KEY, JSON.stringify({ date: today, count: newCount }));
+      await AsyncStorage.setItem(
+        STATS_KEY,
+        JSON.stringify({ date: today, surahIds: Array.from(todaySurahIdsRef.current) })
+      );
     } catch (error) {
       console.error('Error saving position/stats:', error);
+    }
+  };
+
+  // موضع القراءة الحالي (حسب الوضع: صفحات أو متصل) - نقارنه بالموضع المحفوظ لمعرفة
+  // هل الأيقونة تكون معبأة (نفس الموضع المحفوظ بالضبط) أو إطار فارغ (موضع مختلف)
+  const getCurrentReadingPosition = (): LastPosition | null => {
+    if (readerViewMode === 'pages') {
+      const firstVerse = allPages[currentPageIndex]?.[0];
+      if (!firstVerse) return null;
+      return { surahId: firstVerse.surahId, surahName: firstVerse.surahName, verseId: firstVerse.id };
+    }
+    if (!selectedSurah) return null;
+    return { surahId: selectedSurah.id, surahName: selectedSurah.name, verseId: continuousVerseId };
+  };
+
+  const currentReadingPosition = getCurrentReadingPosition();
+  const isCurrentPositionSaved = !!(
+    currentReadingPosition &&
+    lastPosition &&
+    lastPosition.surahId === currentReadingPosition.surahId &&
+    lastPosition.verseId === currentReadingPosition.verseId
+  );
+
+  // ضغطة وحدة: تحفظ موضع القراءة الحالي (وتملي الأيقونة). ضغطة ثانية بنفس الموضع
+  // بالضبط: تلغي الحفظ (ترجع الأيقونة إطار فارغ). هذا هو المكان الوحيد المسؤول
+  // عن حفظ آخر موضع الحين - ما فيه حفظ تلقائي بعد الآن
+  const toggleSavedPosition = async () => {
+    const current = getCurrentReadingPosition();
+    if (!current) return;
+    if (isCurrentPositionSaved) {
+      setLastPosition(null);
+      try {
+        await AsyncStorage.removeItem(LAST_POSITION_KEY);
+      } catch (error) {
+        console.error('Error clearing last position:', error);
+      }
+    } else {
+      setLastPosition(current);
+      try {
+        await AsyncStorage.setItem(LAST_POSITION_KEY, JSON.stringify(current));
+      } catch (error) {
+        console.error('Error saving last position:', error);
+      }
     }
   };
 
@@ -365,6 +818,23 @@ export default function QuranScreen() {
       openSurah(s, verseId);
     }
   };
+
+  // ===== فتح تلقائي من رابط خارجي (إشعار آية بعد الصلاة، أو ref نوعه
+  // 'quran' بجرد أعمال يوم الجمعة) - يشتغل بس أول ما تجهز قائمة السور
+  // (surahs.length > 0)، ومرة وحدة بس لكل دخول للشاشة (handledDeepLinkRef)
+  // حتى ما يعيد فتح نفس السورة لو المستخدم رجع تصفح لسورة ثانية بعدين =====
+  useEffect(() => {
+    if (handledDeepLinkRef.current) return;
+    if (surahs.length === 0) return;
+    if (!deepLinkParams.surah) return;
+
+    const surahId = parseInt(deepLinkParams.surah, 10);
+    const ayahId = deepLinkParams.ayah ? parseInt(deepLinkParams.ayah, 10) : 1;
+    if (!Number.isNaN(surahId)) {
+      handledDeepLinkRef.current = true;
+      openSurahById(surahId, Number.isNaN(ayahId) ? 1 : ayahId);
+    }
+  }, [surahs, deepLinkParams.surah, deepLinkParams.ayah]);
 
   const copyVerseText = async (text: string) => {
     try {
@@ -394,23 +864,6 @@ export default function QuranScreen() {
     }
   };
 
-  const toggleBookmark = async (surahId: number, verseId: number) => {
-    const exists = bookmarks.some((b) => b.surahId === surahId && b.verseId === verseId);
-    const updated = exists
-      ? bookmarks.filter((b) => !(b.surahId === surahId && b.verseId === verseId))
-      : [...bookmarks, { surahId, verseId }];
-
-    setBookmarks(updated);
-    try {
-      await AsyncStorage.setItem(BOOKMARKS_KEY, JSON.stringify(updated));
-    } catch (error) {
-      console.error('Error saving bookmark:', error);
-    }
-  };
-
-  const isBookmarked = (surahId: number, verseId: number) =>
-    bookmarks.some((b) => b.surahId === surahId && b.verseId === verseId);
-
   const changeFontSizeKey = async (key: 'small' | 'medium' | 'large') => {
     setFontSizeKey(key);
     try {
@@ -420,7 +873,7 @@ export default function QuranScreen() {
     }
   };
 
-  const changeFontFamilyChoice = async (choice: 'amiri' | 'system') => {
+  const changeFontFamilyChoice = async (choice: 'uthmani' | 'amiri' | 'system') => {
     setFontFamilyChoice(choice);
     try {
       await AsyncStorage.setItem(FONT_FAMILY_KEY, choice);
@@ -447,11 +900,73 @@ export default function QuranScreen() {
     }
   };
 
-  const getBookmarkDetails = (b: Bookmark) => {
-    const surah = surahs.find((s) => s.id === b.surahId);
-    const verse = surah?.verses.find((v) => v.id === b.verseId);
-    return { surahName: surah?.name || '', verseText: verse?.text || '' };
-  };
+  // مفتاح ترتيب شامل (رقم السورة×١٠٠٠ + رقم الآية) يخلينا نقارن مواقع الآيات عبر كل السور بسهولة
+  const juzOrderKey = (surahId: number, verseId: number) => surahId * 1000 + verseId;
+
+  // تجميع بيانات الأجزاء - محفوظة بـ useMemo (تُحسب مرة وحدة فقط عند تغيّر بيانات السور)
+  // يغطي كل الأجزاء من ١ إلى ٣٠ بدون نقص، حتى لو سورة وحدة امتدت على أكثر من جزء (متل البقرة)
+  // ملاحظة: هذا الـ useMemo لازم يبقى قبل أي return شرطي بالكومبوننت (قاعدة الـ Hooks بـ React)
+  const juzData = useMemo((): JuzSection[] => {
+    const juzMap: { [key: number]: JuzSection } = {};
+    for (let j = 1; j <= 30; j++) {
+      juzMap[j] = { juz: j, surahs: [] };
+    }
+    if (surahs.length === 0) return [];
+
+    // إذا بيانات القرآن فيها رقم جزء مسجل لكل آية، نعتمد عليه مباشرة (الأدق)
+    const hasPerVerseJuz = surahs.every((s) => s.verses.length > 0 && s.verses.every((v) => typeof v.juz === 'number'));
+
+    if (hasPerVerseJuz) {
+      surahs.forEach((surah) => {
+        const versesByJuz: { [j: number]: number[] } = {};
+        surah.verses.forEach((v) => {
+          const j = v.juz as number;
+          if (!versesByJuz[j]) versesByJuz[j] = [];
+          versesByJuz[j].push(v.id);
+        });
+        Object.keys(versesByJuz).forEach((jStr) => {
+          const j = Number(jStr);
+          if (!juzMap[j]) return;
+          const ids = versesByJuz[j];
+          const first = ids[0];
+          const last = ids[ids.length - 1];
+          const isFullSurah = ids.length === surah.total_verses;
+          juzMap[j].surahs.push({
+            id: surah.id,
+            name: surah.name,
+            verses: isFullSurah ? `${toArabicDigits(surah.total_verses)} آية` : `من الآية ${toArabicDigits(first)} إلى ${toArabicDigits(last)}`,
+          });
+        });
+      });
+    } else {
+      // احتياطي: نعتمد نقاط بداية الأجزاء التقريبية، وندعم امتداد نفس السورة لأكثر من جزء
+      for (let j = 1; j <= 30; j++) {
+        const startPoint = JUZ_START_POINTS[j - 1];
+        const nextPoint = JUZ_START_POINTS[j];
+        const rangeStart = juzOrderKey(startPoint.surah, startPoint.verse);
+        const rangeEnd = nextPoint ? juzOrderKey(nextPoint.surah, nextPoint.verse) : Infinity; // نهاية حصرية
+
+        surahs.forEach((surah) => {
+          const surahStart = juzOrderKey(surah.id, 1);
+          const surahEnd = juzOrderKey(surah.id, surah.total_verses);
+          const overlapStart = Math.max(rangeStart, surahStart);
+          const overlapEnd = Math.min(rangeEnd - 1, surahEnd);
+          if (overlapStart > overlapEnd) return;
+
+          const firstVerse = overlapStart - surah.id * 1000;
+          const lastVerse = overlapEnd - surah.id * 1000;
+          const isFullSurah = firstVerse === 1 && lastVerse === surah.total_verses;
+          juzMap[j].surahs.push({
+            id: surah.id,
+            name: surah.name,
+            verses: isFullSurah ? `${toArabicDigits(surah.total_verses)} آية` : `من الآية ${toArabicDigits(firstVerse)} إلى ${toArabicDigits(lastVerse)}`,
+          });
+        });
+      }
+    }
+
+    return Object.values(juzMap).filter((j) => j.surahs.length > 0);
+  }, [surahs]);
 
   if (!fontsLoaded || loading) {
     return (
@@ -463,38 +978,6 @@ export default function QuranScreen() {
   }
 
   const filteredSurahs = surahs.filter((s) => s.name.includes(searchQuery));
-
-  const getJuzData = (): JuzSection[] => {
-    const juzMap: { [key: number]: JuzSection } = {};
-    for (let j = 1; j <= 30; j++) {
-      juzMap[j] = { juz: j, surahs: [] };
-    }
-
-    surahs.forEach((surah) => {
-      for (let i = 0; i < JUZ_START_POINTS.length; i++) {
-        const current = JUZ_START_POINTS[i];
-        const next = JUZ_START_POINTS[i + 1];
-
-        if (surah.id === current.surah) {
-          juzMap[current.juz].surahs.push({
-            id: surah.id,
-            name: surah.name,
-            verses: surah.total_verses + ' آية',
-          });
-          break;
-        } else if (surah.id > current.surah && (!next || surah.id < next.surah)) {
-          juzMap[current.juz].surahs.push({
-            id: surah.id,
-            name: surah.name,
-            verses: surah.total_verses + ' آية',
-          });
-          break;
-        }
-      }
-    });
-
-    return Object.values(juzMap).filter((j) => j.surahs.length > 0);
-  };
 
   return (
     <ImageBackground
@@ -510,48 +993,57 @@ export default function QuranScreen() {
         ]}
       />
       <SafeAreaView style={[styles.container, { backgroundColor: 'transparent' }]}>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
-        <BlurView intensity={65} tint="dark" style={styles.header}>
+        <BlurView intensity={blurIntensity(65)} tint="dark" style={styles.header}>
           <View style={styles.headerGlass} />
           <View style={styles.headerTopRow}>
-            <View style={{ width: 34 }} />
-            <Text style={styles.headerTitle}>۞ المصحف الشريف ۞</Text>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <TouchableOpacity onPress={() => setShowVerseSearch(true)} style={styles.headerIconBtn} activeOpacity={0.75}>
-                <Ionicons name="search" size={18} color={C.neonBlue} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setShowSettings(true)}
-                style={styles.headerIconBtn}
-                activeOpacity={0.75}
-              >
-                <Ionicons name="options-outline" size={18} color={C.neonBlue} />
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              onPress={() => setShowSettings(true)}
+              style={styles.headerIconBtn}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="options-outline" size={18} color={C.neonBlue} />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>
+              <Text style={styles.headerTitleOrnament}>۞ </Text>
+              المصحف الشريف
+              <Text style={styles.headerTitleOrnament}> ۞</Text>
+            </Text>
+            <TouchableOpacity onPress={() => setShowVerseSearch(true)} style={styles.headerIconBtn} activeOpacity={0.75}>
+              <Ionicons name="search" size={18} color={C.neonBlue} />
+            </TouchableOpacity>
           </View>
           <View style={styles.headerRow}>
-            <TouchableOpacity onPress={() => setShowBookmarks(true)} style={styles.headerBtn} activeOpacity={0.7}>
-              <Ionicons name="bookmark" size={13} color={C.neonBlue} />
-              <Text style={styles.headerBtnText}>المحفوظات</Text>
-            </TouchableOpacity>
-            <Text style={styles.statsText}>قرأت اليوم {todayCount} سورة</Text>
+            {lastPosition ? (
+              <TouchableOpacity
+                onPress={() => openSurahById(lastPosition.surahId, lastPosition.verseId)}
+                style={styles.headerBtn}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="bookmark" size={13} color={C.neonBlue} />
+                <Text style={styles.headerBtnText}>آخر موضع توقفت فيه</Text>
+              </TouchableOpacity>
+            ) : (
+              <View />
+            )}
+            <Text style={styles.statsText}>قرأت اليوم {toArabicDigits(todayCount)} سورة</Text>
           </View>
         </BlurView>
 
-        {lastPosition && (
-          <TouchableOpacity
-            style={styles.lastPositionBanner}
-            activeOpacity={0.8}
-            onPress={() => {
-              const s = surahs.find((s) => s.id === lastPosition.surahId);
-              if (s) openSurah(s);
-            }}
-          >
-            <Text style={styles.lastPositionText}>
-              استمر من حيث توقفت: سورة {lastPosition.surahName}
-            </Text>
-          </TouchableOpacity>
+        {/* شريط البحث صار هنا فوق التبويبات مباشرة (بدل تحتها) - نفس ترتيب شاشة
+            الأدعية: عنوان -> مقدمة -> بحث -> قائمة. يبقى خاص بتبويب "السور" فقط. */}
+        {activeTab === 0 && (
+          <View style={styles.searchContainer}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="بحث عن سورة..."
+              placeholderTextColor="rgba(255,255,255,0.4)"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              textAlign="right"
+            />
+          </View>
         )}
 
         <View style={styles.tabsContainer}>
@@ -572,39 +1064,27 @@ export default function QuranScreen() {
         </View>
 
         {activeTab === 0 && (
-          <>
-            <View style={styles.searchContainer}>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="بحث عن سورة..."
-                placeholderTextColor="rgba(255,255,255,0.4)"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                textAlign="right"
-              />
-            </View>
-            <FlatList
-              data={filteredSurahs}
-              keyExtractor={(item) => item.id.toString()}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.surahCard}
-                  onPress={() => openSurah(item)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.surahName}>{item.id}. {item.name}</Text>
-                  <Text style={styles.surahInfo}>{item.total_verses} آية</Text>
+          <FlatList
+            data={filteredSurahs}
+            keyExtractor={(item) => item.id.toString()}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.surahCard}
+                onPress={() => openSurah(item)}
+                activeOpacity={0.8}
+              >
+                  <Text style={styles.surahName}>{toArabicDigits(item.id)}. {item.name}</Text>
+                  <Text style={styles.surahInfo}>{toArabicDigits(item.total_verses)} آية</Text>
                 </TouchableOpacity>
               )}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
             />
-          </>
         )}
 
         {activeTab === 1 && (
           <FlatList
-            data={getJuzData()}
+            data={juzData}
             keyExtractor={(item) => item.juz.toString()}
             renderItem={({ item: juz }) => (
               <View style={styles.juzSection}>
@@ -619,7 +1099,7 @@ export default function QuranScreen() {
                     }}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.juzSurahName}>{surah.id}. {surah.name}</Text>
+                    <Text style={styles.juzSurahName}>{toArabicDigits(surah.id)}. {surah.name}</Text>
                     <Text style={styles.juzSurahVerses}>{surah.verses}</Text>
                   </TouchableOpacity>
                 ))}
@@ -646,7 +1126,7 @@ export default function QuranScreen() {
             {readingBg.image && <View style={[StyleSheet.absoluteFill, { backgroundColor: readingBg.color, opacity: 0.12 }]} />}
             <SafeAreaView style={[styles.modalContainer, { backgroundColor: 'transparent' }]}>
               {!readingMode && (
-                <BlurView intensity={60} tint="dark" style={styles.modalHeader}>
+                <BlurView intensity={blurIntensity(60)} tint="dark" style={styles.modalHeader}>
                   <TouchableOpacity
                     style={styles.closeBtn}
                     onPress={() => setSelectedSurah(null)}
@@ -654,8 +1134,26 @@ export default function QuranScreen() {
                   >
                     <Ionicons name="chevron-forward" size={22} color={C.neonBlue} />
                   </TouchableOpacity>
-                  <Text style={styles.modalTitle}>{allPages[currentPageIndex]?.[0]?.surahName ?? selectedSurah?.name}</Text>
+                  <View style={{ flex: 1, alignItems: 'center' }}>
+                    <Text style={styles.modalTitle}>
+                      {readerViewMode === 'pages'
+                        ? allPages[currentPageIndex]?.[0]?.surahName ?? selectedSurah?.name
+                        : selectedSurah?.name}
+                    </Text>
+                    {readerViewMode === 'pages' && allPages[currentPageIndex]?.[0]?.juz && (
+                      <Text style={styles.modalJuzSubtitle}>
+                        الجزء {toArabicDigits(allPages[currentPageIndex][0].juz as number)}
+                      </Text>
+                    )}
+                  </View>
                   <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <TouchableOpacity
+                      onPress={toggleSavedPosition}
+                      style={styles.headerIconBtn}
+                      activeOpacity={0.75}
+                    >
+                      <Ionicons name={isCurrentPositionSaved ? 'bookmark' : 'bookmark-outline'} size={18} color={C.neonBlue} />
+                    </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => setReadingMode(true)}
                       style={styles.headerIconBtn}
@@ -684,19 +1182,47 @@ export default function QuranScreen() {
                 </TouchableOpacity>
               )}
 
-              {/* شريط تقدم القراءة (حسب رقم الصفحة، على مستوى القرآن كامل) */}
+              {/* شريط تقدم القراءة: حسب رقم الصفحة بوضع الصفحات، أو حسب رقم الآية الحالية بالسورة بالوضع المتصل */}
               {!readingMode && (
                 <View style={styles.progressTrack}>
                   <View
                     style={[
                       styles.progressFill,
-                      { width: `${Math.round(((currentPageIndex + 1) / Math.max(1, allPages.length)) * 100)}%` },
+                      readerViewMode === 'pages'
+                        ? { width: `${Math.round(((currentPageIndex + 1) / Math.max(1, allPages.length)) * 100)}%` }
+                        : {
+                            width: `${Math.round(
+                              (continuousVerseId / Math.max(1, selectedSurah?.verses.length ?? 1)) * 100
+                            )}%`,
+                          },
                     ]}
                   />
                 </View>
               )}
 
               <View style={{ flex: 1 }} onLayout={(e) => setReaderAreaHeight(e.nativeEvent.layout.height)}>
+                {readerViewMode === 'continuous' ? (
+                  <ContinuousReader
+                    verses={currentSurahTaggedVerses}
+                    activeFontFamily={activeFontFamily}
+                    fontSize={fontSize}
+                    showTashkeel={showTashkeel}
+                    setShareVerse={setShareVerse}
+                    listRef={continuousListRef}
+                    initialVerseIndex={Math.max(
+                      0,
+                      currentSurahTaggedVerses.findIndex((v) => v.id === continuousVerseId)
+                    )}
+                    onPositionChange={updateContinuousPosition}
+                    autoScrollActive={autoScrollActive}
+                    setAutoScrollActive={setAutoScrollActive}
+                    autoScrollSpeed={autoScrollSpeed}
+                    setAutoScrollSpeed={setAutoScrollSpeed}
+                    scrollOffsetRef={continuousScrollOffsetRef}
+                    jumpSignal={continuousJumpSignal}
+                    jumpTargetVerseId={continuousVerseId}
+                  />
+                ) : (
                 <FlatList<TaggedVerse[]>
                   ref={readerListRef}
                   style={{ flex: 1 }}
@@ -705,98 +1231,101 @@ export default function QuranScreen() {
                   horizontal
                   pagingEnabled
                   showsHorizontalScrollIndicator={false}
-                  getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+                  extraData={pageWidth}
+                  getItemLayout={(_, index) => ({ length: pageWidth, offset: pageWidth * index, index })}
                   initialScrollIndex={currentPageIndex}
                   onScrollToIndexFailed={() => {}}
+                  // تحسينات أداء - نخلي عدد الصفحات المحملة بالذاكرة بنفس اللحظة قليل جداً (صفحة قبل وبعد بس)
+                  // حتى ما يثقل التطبيق كل ما تتنقل أكثر بين الصفحات والسور
+                  initialNumToRender={2}
+                  maxToRenderPerBatch={2}
+                  windowSize={3}
+                  removeClippedSubviews={Platform.OS === 'android'}
+                  updateCellsBatchingPeriod={50}
                   onMomentumScrollEnd={(e) => {
-                    const idx = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+                    const idx = Math.round(e.nativeEvent.contentOffset.x / pageWidth);
                     setCurrentPageIndex(idx);
                     setReadProgress((idx + 1) / Math.max(1, allPages.length));
                   }}
-                  renderItem={({ item: pageVerses }) => {
+                  renderItem={({ item: pageVerses, index: pageIndex }) => {
                     const firstVerse = pageVerses[0];
                     const pageStartsNewSurah = firstVerse?.id === 1;
                     return (
-                      <View style={{ width: SCREEN_WIDTH, height: readerAreaHeight || undefined, flex: readerAreaHeight ? undefined : 1 }}>
-                      {/* شارة الجزء - إطار نيوني خفيف بدل الشريط الزجاجي الكامل */}
-                      {firstVerse?.juz && (
-                        <View style={styles.juzBadge} pointerEvents="none">
-                          <Text style={styles.juzBadgeText}>الجزء {firstVerse.juz}</Text>
-                        </View>
-                      )}
-
+                      <View style={{ width: pageWidth, height: readerAreaHeight || undefined, flex: readerAreaHeight ? undefined : 1 }}>
                       {/* لافتة اسم السورة + البسملة - ثابتة أعلى الصفحة إذا السورة تبدأ بأول الصفحة */}
                       {pageStartsNewSurah && (
-                        <View style={styles.surahBannerFixed}>
-                          <Text style={styles.surahHeaderArabic}>
-                            {'سورة ' + firstVerse.surahName}
-                          </Text>
-                          {!NO_BISMILLAH_SURAHS.includes(firstVerse.surahId) && (
-                            <Text style={[styles.bismillah, { fontFamily: activeFontFamily }]}>{BISMILLAH}</Text>
-                          )}
-                        </View>
+                        <SurahBanner
+                          surahId={firstVerse.surahId}
+                          surahName={firstVerse.surahName}
+                          activeFontFamily={activeFontFamily}
+                        />
                       )}
 
                       <ScrollView
+                        ref={(r) => {
+                          if (r) pageScrollRefs.current.set(pageIndex, r);
+                          else pageScrollRefs.current.delete(pageIndex);
+                        }}
+                        onScroll={(e) => pageScrollOffsets.current.set(pageIndex, e.nativeEvent.contentOffset.y)}
+                        scrollEventThrottle={16}
                         style={styles.versesContainer}
                         showsVerticalScrollIndicator={false}
                         contentContainerStyle={styles.versesContentCentered}
                       >
-                        <Text style={styles.versesFlow}>
-                          {pageVerses.map((verse, idx) => (
-                            <Text key={`${verse.surahId}-${verse.id}`}>
-                              {/* لو سورة جديدة تبدأ بمنتصف الصفحة (مو أول آية بالصفحة) نعرض اللافتة هنا بمكانها */}
-                              {verse.id === 1 && idx !== 0 && (
-                                <Text>
-                                  {'\n'}
-                                  <Text style={styles.surahHeaderArabic}>{'سورة ' + verse.surahName}</Text>
-                                  {'\n'}
-                                  {!NO_BISMILLAH_SURAHS.includes(verse.surahId) && (
-                                    <Text style={[styles.bismillah, { fontFamily: activeFontFamily }]}>
-                                      {'\n'}{BISMILLAH}{'\n'}
+                        <View style={styles.versesPanel}>
+                          {buildPageSegments(pageVerses).map((seg, si) => {
+                            if (seg.type === 'banner') {
+                              return (
+                                <SurahBanner
+                                  key={`banner-${seg.surahId}-${si}`}
+                                  surahId={seg.surahId}
+                                  surahName={seg.surahName}
+                                  activeFontFamily={activeFontFamily}
+                                />
+                              );
+                            }
+                            return (
+                              <Text key={`verses-${si}`} style={[styles.versesFlow, { fontSize, lineHeight: Math.round(fontSize * 2.2) }]}>
+                                {seg.verses.map((verse) => (
+                                  <Text key={`${verse.surahId}-${verse.id}`}>
+                                    <Text style={[styles.verseText, { fontSize, fontFamily: activeFontFamily }]}>
+                                      {showTashkeel ? getVerseDisplayText(verse) : stripTashkeel(getVerseDisplayText(verse))}
                                     </Text>
-                                  )}
-                                </Text>
-                              )}
-                              <Text style={[styles.verseText, { fontSize, fontFamily: activeFontFamily }]}>
-                                {showTashkeel ? getVerseDisplayText(verse) : stripTashkeel(getVerseDisplayText(verse))}
+                                    <Text
+                                      style={styles.verseNumberInline}
+                                      onLongPress={() =>
+                                        setShareVerse({ surahName: verse.surahName, verseId: verse.id, text: verse.text })
+                                      }
+                                    >
+                                      {' '}{'﴿'}{toArabicDigits(verse.id)}{'﴾'}{' '}
+                                    </Text>
+                                    {verse.surahId === 114 && verse.id === 6 && (
+                                      <Text style={styles.khatmDua}>
+                                        {'\n\n'}«صَدَقَ اللَّهُ العَظِيمُ»{'\n\n'}
+                                        اللَّهُمَّ ارْحَمْنَا بِالقُرْآنِ، وَاجْعَلْهُ لَنَا إِمَامًا وَنُورًا وَهُدًى وَرَحْمَةً،{'\n'}
+                                        اللَّهُمَّ ذَكِّرْنَا مِنْهُ مَا نُسِّينَا، وَعَلِّمْنَا مِنْهُ مَا جَهِلْنَا،{'\n'}
+                                        وَارْزُقْنَا تِلَاوَتَهُ آنَاءَ اللَّيْلِ وَأَطْرَافَ النَّهَارِ،{'\n'}
+                                        وَاجْعَلْهُ لَنَا حُجَّةً يَا رَبَّ العَالَمِينَ،{'\n'}
+                                        وَتَقَبَّلْ مِنَّا هَذِهِ الخَتْمَةَ المُبَارَكَةَ، آمِين.
+                                      </Text>
+                                    )}
+                                  </Text>
+                                ))}
                               </Text>
-                              <Text
-                                style={[
-                                  styles.verseNumberInline,
-                                  isBookmarked(verse.surahId, verse.id) && styles.verseNumberBookmarked,
-                                ]}
-                                onPress={() => toggleBookmark(verse.surahId, verse.id)}
-                                onLongPress={() =>
-                                  setShareVerse({ surahName: verse.surahName, verseId: verse.id, text: verse.text })
-                                }
-                              >
-                                {' '}{'۝'}{verse.id}{' '}
-                              </Text>
-                              {verse.surahId === 114 && verse.id === 6 && (
-                                <Text style={styles.khatmDua}>
-                                  {'\n\n'}«صَدَقَ اللَّهُ العَظِيمُ»{'\n\n'}
-                                  اللَّهُمَّ ارْحَمْنَا بِالقُرْآنِ، وَاجْعَلْهُ لَنَا إِمَامًا وَنُورًا وَهُدًى وَرَحْمَةً،{'\n'}
-                                  اللَّهُمَّ ذَكِّرْنَا مِنْهُ مَا نُسِّينَا، وَعَلِّمْنَا مِنْهُ مَا جَهِلْنَا،{'\n'}
-                                  وَارْزُقْنَا تِلَاوَتَهُ آنَاءَ اللَّيْلِ وَأَطْرَافَ النَّهَارِ،{'\n'}
-                                  وَاجْعَلْهُ لَنَا حُجَّةً يَا رَبَّ العَالَمِينَ،{'\n'}
-                                  وَتَقَبَّلْ مِنَّا هَذِهِ الخَتْمَةَ المُبَارَكَةَ، آمِين.
-                                </Text>
-                              )}
-                            </Text>
-                          ))}
-                        </Text>
+                            );
+                          })}
+                        </View>
                       </ScrollView>
 
                       {/* شارة الحزب + رقم الصفحة داخل دائرة مزخرفة */}
                       <View style={styles.bottomBadgesRow} pointerEvents="none">
                         {firstVerse?.hizb ? (
                           <View style={styles.hizbBadge}>
-                            <Text style={styles.hizbBadgeText}>الحزب {firstVerse.hizb}</Text>
+                            <Text style={styles.hizbBadgeText}>الحزب {toArabicDigits(firstVerse.hizb)}</Text>
                           </View>
                         ) : <View />}
                         <View style={styles.pageCircle}>
-                          <Text style={styles.pageCircleText}>{firstVerse?.page ?? ''}</Text>
+                          <Text style={styles.pageCircleText}>{firstVerse?.page ? toArabicDigits(firstVerse.page) : ''}</Text>
                         </View>
                         <View style={{ width: 70 }} />
                       </View>
@@ -804,63 +1333,10 @@ export default function QuranScreen() {
                   );
                 }}
               />
+                )}
               </View>
             </SafeAreaView>
           </ImageBackground>
-        </Modal>
-
-        <Modal
-          visible={showBookmarks}
-          animationType="slide"
-          onRequestClose={() => setShowBookmarks(false)}
-          transparent={false}
-        >
-          <SafeAreaView style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <TouchableOpacity
-                style={styles.closeBtn}
-                onPress={() => setShowBookmarks(false)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.closeBtnText}>✕</Text>
-              </TouchableOpacity>
-              <Text style={styles.modalTitle}>الآيات المحفوظة</Text>
-              <View style={{ width: 40 }} />
-            </View>
-            <View style={styles.hintBar}>
-              <Ionicons name="information-circle-outline" size={15} color="rgba(255,255,255,0.65)" />
-              <Text style={styles.hintBarText}>لحفظ آية، اضغط على رقمها أثناء القراءة</Text>
-            </View>
-            <FlatList
-              data={bookmarks}
-              keyExtractor={(item, index) => `${item.surahId}-${item.verseId}-${index}`}
-              contentContainerStyle={styles.listContent}
-              renderItem={({ item }) => {
-                const details = getBookmarkDetails(item);
-                return (
-                  <TouchableOpacity
-                    style={styles.bookmarkCard}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      const s = surahs.find((s) => s.id === item.surahId);
-                      if (s) {
-                        setShowBookmarks(false);
-                        openSurah(s);
-                      }
-                    }}
-                  >
-                    <Text style={styles.bookmarkSurahName}>
-                      سورة {details.surahName} - آية {item.verseId}
-                    </Text>
-                    <Text style={styles.bookmarkVerseText} numberOfLines={2}>
-                      {details.verseText}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              }}
-              ListEmptyComponent={<Text style={styles.emptyText}>لا توجد آيات محفوظة بعد</Text>}
-            />
-          </SafeAreaView>
         </Modal>
 
         <Modal
@@ -870,7 +1346,7 @@ export default function QuranScreen() {
           onRequestClose={() => (showBgPicker ? setShowBgPicker(false) : setShowSettings(false))}
         >
           <View style={styles.settingsOverlay}>
-            <BlurView intensity={50} tint="dark" style={styles.settingsCard}>
+            <BlurView intensity={blurIntensity(50)} tint="dark" style={styles.settingsCard}>
               <View style={styles.settingsCardGlass} />
 
               {!showBgPicker ? (
@@ -902,8 +1378,30 @@ export default function QuranScreen() {
                     ))}
                   </View>
 
+                  <Text style={styles.settingsLabel}>طريقة العرض</Text>
+                  <View style={styles.chipsRow}>
+                    <TouchableOpacity
+                      onPress={() => changeReaderViewMode('pages')}
+                      style={[styles.chip, readerViewMode === 'pages' && styles.chipActive]}
+                    >
+                      <Text style={[styles.chipText, readerViewMode === 'pages' && styles.chipTextActive]}>صفحات</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => changeReaderViewMode('continuous')}
+                      style={[styles.chip, readerViewMode === 'continuous' && styles.chipActive]}
+                    >
+                      <Text style={[styles.chipText, readerViewMode === 'continuous' && styles.chipTextActive]}>متصل</Text>
+                    </TouchableOpacity>
+                  </View>
+
                   <Text style={styles.settingsLabel}>نوع الخط</Text>
                   <View style={styles.chipsRow}>
+                    <TouchableOpacity
+                      onPress={() => changeFontFamilyChoice('uthmani')}
+                      style={[styles.chip, fontFamilyChoice === 'uthmani' && styles.chipActive]}
+                    >
+                      <Text style={[styles.chipText, fontFamilyChoice === 'uthmani' && styles.chipTextActive]}>عثماني</Text>
+                    </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => changeFontFamilyChoice('amiri')}
                       style={[styles.chip, fontFamilyChoice === 'amiri' && styles.chipActive]}
@@ -1009,59 +1507,61 @@ export default function QuranScreen() {
         {/* بحث داخل نص الآيات */}
         <Modal
           visible={showVerseSearch}
-          animationType="slide"
+          animationType="fade"
           transparent
           onRequestClose={() => setShowVerseSearch(false)}
         >
-          <View style={styles.settingsOverlay}>
-            <BlurView intensity={50} tint="dark" style={[styles.settingsCard, { maxHeight: '90%' }]}>
-              <View style={styles.settingsCardGlass} />
-              <View style={styles.settingsHeader}>
-                <TouchableOpacity
-                  style={styles.backArrowBtn}
-                  onPress={() => setShowVerseSearch(false)}
-                  activeOpacity={0.75}
-                >
-                  <Ionicons name="chevron-forward" size={20} color={C.white} />
-                </TouchableOpacity>
-                <Text style={styles.settingsTitle}>البحث في الآيات</Text>
-                <View style={{ width: 32 }} />
-              </View>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="اكتب كلمة أو جملة من الآية..."
-                placeholderTextColor="rgba(255,255,255,0.4)"
-                value={verseSearchInput}
-                onChangeText={setVerseSearchInput}
-                textAlign="right"
-                autoFocus
-              />
-              {verseSearchResults.length > 0 && (
-                <Text style={styles.searchResultsCount}>{verseSearchResults.length} نتيجة{verseSearchResults.length >= 80 ? '+' : ''}</Text>
-              )}
-              <FlatList
-                data={verseSearchResults}
-                keyExtractor={(item, i) => `${item.surahId}-${item.verseId}-${i}`}
-                style={{ marginTop: 10 }}
-                renderItem={({ item }) => (
+          <View style={styles.verseSearchOverlay}>
+            <SafeAreaView style={styles.verseSearchSafeArea}>
+              <BlurView intensity={blurIntensity(65)} tint="dark" style={styles.verseSearchCard}>
+                <View style={styles.settingsCardGlass} />
+                <View style={styles.settingsHeader}>
                   <TouchableOpacity
-                    style={styles.verseResultCard}
-                    activeOpacity={0.8}
-                    onPress={() => openSurahById(item.surahId, item.verseId)}
+                    style={styles.backArrowBtn}
+                    onPress={() => setShowVerseSearch(false)}
+                    activeOpacity={0.75}
                   >
-                    <Text style={styles.verseResultHeader}>سورة {item.surahName} - آية {item.verseId}</Text>
-                    <Text style={styles.verseResultText} numberOfLines={2}>{item.text}</Text>
+                    <Ionicons name="chevron-forward" size={20} color={C.white} />
                   </TouchableOpacity>
+                  <Text style={styles.settingsTitle}>البحث في الآيات</Text>
+                  <View style={{ width: 32 }} />
+                </View>
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="اكتب كلمة أو جملة من الآية..."
+                  placeholderTextColor="rgba(255,255,255,0.4)"
+                  value={verseSearchInput}
+                  onChangeText={setVerseSearchInput}
+                  textAlign="right"
+                  autoFocus
+                />
+                {verseSearchResults.length > 0 && (
+                  <Text style={styles.searchResultsCount}>{toArabicDigits(verseSearchResults.length)} نتيجة{verseSearchResults.length >= 80 ? '+' : ''}</Text>
                 )}
-                ListEmptyComponent={
-                  verseSearchQuery.length >= 2 ? (
-                    <Text style={styles.emptyText}>لا توجد نتائج مطابقة</Text>
-                  ) : (
-                    <Text style={styles.emptyText}>اكتب حرفين على الأقل للبحث</Text>
-                  )
-                }
-              />
-            </BlurView>
+                <FlatList
+                  data={verseSearchResults}
+                  keyExtractor={(item, i) => `${item.surahId}-${item.verseId}-${i}`}
+                  style={{ marginTop: 10 }}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.verseResultCard}
+                      activeOpacity={0.8}
+                      onPress={() => openSurahById(item.surahId, item.verseId)}
+                    >
+                      <Text style={styles.verseResultHeader}>سورة {item.surahName} - آية {toArabicDigits(item.verseId)}</Text>
+                      <Text style={styles.verseResultText} numberOfLines={2}>{item.text}</Text>
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={
+                    verseSearchQuery.length >= 2 ? (
+                      <Text style={styles.emptyText}>لا توجد نتائج مطابقة</Text>
+                    ) : (
+                      <Text style={styles.emptyText}>اكتب حرفين على الأقل للبحث</Text>
+                    )
+                  }
+                />
+              </BlurView>
+            </SafeAreaView>
           </View>
         </Modal>
 
@@ -1129,7 +1629,7 @@ export default function QuranScreen() {
                 <Text style={styles.onboardingText}>وضع القراءة: يخفي الأشرطة العلوية للقراءة بلا تشتيت</Text>
               </View>
               <TouchableOpacity
-                style={styles.randomBtn}
+                style={styles.onboardingConfirmBtn}
                 activeOpacity={0.85}
                 onPress={async () => {
                   setShowOnboarding(false);
@@ -1147,7 +1647,7 @@ export default function QuranScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0e27' },
+  container: { flex: 1, backgroundColor: '#0a0e27', paddingTop: ANDROID_STATUS_BAR_PADDING },
   center: {
     flex: 1,
     justifyContent: 'center',
@@ -1172,6 +1672,11 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontFamily: 'Amiri-Bold',
     flex: 1,
+  },
+  headerTitleOrnament: {
+    fontFamily: undefined,
+    color: C.neonBlue,
+    fontSize: 20,
   },
   headerIconBtn: {
     width: 32,
@@ -1222,6 +1727,25 @@ const styles = StyleSheet.create({
     color: '#4da8da',
     fontSize: 14,
     textAlign: 'right',
+    fontFamily: 'Amiri-Regular',
+  },
+  savedPositionChip: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-end',
+    marginTop: 8,
+    marginRight: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: 'rgba(10,20,40,0.55)',
+    borderWidth: 1,
+    borderColor: C.neonBorder,
+  },
+  savedPositionChipText: {
+    color: C.neonBlue,
+    fontSize: 12,
     fontFamily: 'Amiri-Regular',
   },
   tabsContainer: {
@@ -1275,7 +1799,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
-    overflow: 'hidden',
     ...neonGlowShadow,
   },
   surahName: {
@@ -1326,7 +1849,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Amiri-Regular',
     textAlign: 'left',
   },
-  modalContainer: { flex: 1, backgroundColor: '#000' },
+  modalContainer: { flex: 1, backgroundColor: '#000', paddingTop: ANDROID_STATUS_BAR_PADDING },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1353,31 +1876,97 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: 'Amiri-Bold',
   },
+  modalJuzSubtitle: {
+    fontSize: 12,
+    color: C.neonBlue,
+    fontFamily: 'Amiri-Bold',
+    marginTop: 2,
+  },
   surahHeaderArabic: {
-    fontSize: 27,
+    fontSize: 26,
     color: '#fff',
     fontFamily: 'Amiri-Bold',
     textAlign: 'center',
     textShadowColor: C.neonGlow,
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 10,
+    marginHorizontal: 10,
   },
   versesContainer: { flex: 1 },
-  versesContentCentered: { flexGrow: 1, justifyContent: 'flex-start', paddingHorizontal: 20, paddingTop: 10, paddingBottom: 60 },
+  versesContentCentered: { flexGrow: 1, justifyContent: 'flex-start', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 60 },
+  // النص يطفو مباشرة على الخلفية - بدون لوحة أو حدود
+  versesPanel: {
+    paddingHorizontal: 18,
+    paddingVertical: 22,
+  },
+  versesPanelBg: {
+    display: 'none',
+  },
+  continuousContent: { paddingHorizontal: 18, paddingTop: 10 },
+  // زر التمرير التلقائي البطيء العائم (وضع السكرول المتصل فقط)
+  autoScrollDock: {
+    position: 'absolute',
+    bottom: 22,
+    left: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  autoScrollBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(8,16,36,0.85)',
+    borderWidth: 1.3,
+    borderColor: C.neonBlue,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...neonGlowShadow,
+  },
+  autoScrollSpeedBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    backgroundColor: 'rgba(8,16,36,0.85)',
+    borderWidth: 1,
+    borderColor: 'rgba(87,200,242,0.4)',
+  },
+  autoScrollSpeedText: { color: '#fff', fontSize: 12, fontFamily: 'Amiri-Bold' },
+  // لافتة اسم السورة - شريط زجاجي نيوني موحّد (نفس الأسلوب أعلى الصفحة وبمنتصفها)
   surahBannerFixed: {
     alignItems: 'center',
-    paddingTop: 14,
-    paddingBottom: 10,
+    marginTop: 6,
+    marginBottom: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  surahBannerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  surahBannerLine: {
+    width: 26,
+    height: 1,
+    backgroundColor: 'rgba(87,200,242,0.5)',
+  },
+  surahBannerIcon: {
+    marginHorizontal: 8,
+    opacity: 0.85,
   },
   versesFlow: {
     fontSize: 24,
-    color: '#e8f0ff',
-    lineHeight: 52,
-    textAlign: 'center',
+    color: '#f2f7ff',
+    lineHeight: 54,
+    textAlign: 'justify',
+    writingDirection: 'rtl',
     fontFamily: 'Amiri-Regular',
+    textShadowColor: 'rgba(0,0,0,0.9)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
   },
   verseText: {
-    color: '#e8f0ff',
+    color: '#f2f7ff',
     fontFamily: 'Amiri-Regular',
   },
   verseNumberInline: {
@@ -1388,6 +1977,14 @@ const styles = StyleSheet.create({
   },
   verseNumberBookmarked: {
     color: '#fbbf24',
+  },
+  sajdaMark: {
+    fontSize: 20,
+    color: '#22c55e',
+    fontWeight: '700',
+  },
+  sajdaMarkObligatory: {
+    color: '#ef4444',
   },
   bookmarkIconIdle: { color: 'rgba(255,255,255,0.55)', fontSize: 16 },
   bookmarkIconActive: { color: '#fbbf24', fontSize: 16 },
@@ -1440,6 +2037,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginHorizontal: 5,
   },
+  // زر منفرد (مو جنب زر ثاني بصف) - بدون flex:1 حتى ما يتمدد بشكل غير طبيعي
+  // ويدفع نصه خارج المكان المرئي (هذا كان سبب زر "فهمت" يبين شريط أبيض فاضي)
+  onboardingConfirmBtn: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    marginTop: 6,
+  },
   randomBtnSecondary: {
     backgroundColor: '#2a3d5d',
   },
@@ -1449,6 +2057,15 @@ const styles = StyleSheet.create({
     fontFamily: 'Amiri-Bold',
   },
   settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  verseSearchOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-start' },
+  verseSearchSafeArea: { width: '100%', paddingTop: ANDROID_STATUS_BAR_PADDING },
+  verseSearchCard: {
+    padding: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    overflow: 'hidden',
+    maxHeight: '92%',
+  },
   settingsCard: {
     padding: 20,
     borderTopLeftRadius: 24,
@@ -1566,14 +2183,11 @@ const styles = StyleSheet.create({
   },
   juzBadgeText: { color: C.neonBlue, fontSize: 12, fontFamily: 'Amiri-Bold' },
   bottomBadgesRow: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 12,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   hizbBadge: {
     paddingHorizontal: 12,

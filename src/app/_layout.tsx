@@ -1,113 +1,196 @@
 ﻿import { ThemeProvider } from '@/contexts/theme-contexts';
+import { registerBackgroundNotificationHandlers } from '@/utils/notifications';
 import { Ionicons } from '@expo/vector-icons';
-import { Tabs } from 'expo-router';
-import { LogBox, Platform, StyleSheet, View } from 'react-native';
+import { BlurView } from 'expo-blur';
+import { useFonts } from 'expo-font';
+import * as Notifications from 'expo-notifications';
+import { router, Tabs } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
+import { useEffect } from 'react';
+import { ColorValue, LogBox, Platform, StyleSheet } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 LogBox.ignoreAllLogs(true);
 
-// خلفية شريط التابات - زجاجية شبه شفافة (هدف ١)
-// تخلي الشريط يبدو جزءاً من نفس خلفية الشاشة مب طبقة منفصلة فوقها
+registerBackgroundNotificationHandlers();
+
+SplashScreen.preventAutoHideAsync().catch(() => {});
+
 function GlassTabBarBackground() {
   return (
-    <View
+    <BlurView
+      intensity={Platform.OS === 'ios' ? 80 : 100}
+      tint="dark"
       style={[
         StyleSheet.absoluteFill,
         {
-          // نفس درجة الزجاج المستخدمة بدائرة التسبيح بالضبط
-          backgroundColor: 'rgba(255,255,255,0.10)',
+          backgroundColor: 'rgba(255,255,255,0.08)',
           borderTopWidth: 1,
           borderTopColor: 'rgba(255,255,255,0.22)',
+          overflow: 'hidden',
         },
       ]}
     />
   );
 }
 
-export default function Layout() {
+function GuideIcon({
+  size,
+  color,
+  focused,
+}: {
+  size: number;
+  color: ColorValue;
+  focused: boolean;
+}) {
   return (
-    <ThemeProvider>
-      <Tabs
-        screenOptions={{
-          headerShown: false,
-          // الشريط يصير عائم وشفاف فوق خلفية الشاشة نفسها بدل ما يكون شريط منفصل (هدف ١)
-          tabBarStyle: {
-            position: 'absolute',
-            backgroundColor: 'transparent',
-            borderTopColor: 'transparent',
-            borderTopWidth: 0,
-            height: 65,
-            paddingBottom: 8,
-            paddingTop: 5,
-            elevation: 0,
-            ...(Platform.OS === 'web' ? { backdropFilter: 'blur(14px)' } as any : {}),
-          },
-          tabBarBackground: () => <GlassTabBarBackground />,
-          tabBarActiveTintColor: '#4da8da',
-          tabBarInactiveTintColor: 'rgba(255,255,255,0.55)',
-          tabBarLabelStyle: {
-            fontSize: 11,
-            fontWeight: '600',
-          },
-        }}
-      >
-        {/* ===== التابز الظاهرة ===== */}
-        <Tabs.Screen
-          name="tasbih"
-          options={{
-            title: 'التسبيح',
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="filter-circle-outline" size={size} color={color} />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="adiyah"
-          options={{
-            title: 'الأدعية',
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="heart-outline" size={size} color={color} />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="athkar"
-          options={{
-            title: 'الأذكار',
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="moon-outline" size={size} color={color} />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="quran"
-          options={{
-            title: 'المصحف',
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="book-outline" size={size} color={color} />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="dalil-almutaqeen" 
-          options={{
-            title: 'دليل المتقين',
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="shield-checkmark-outline" size={size} color={color} />
-            ),
-          }}
-        />
+    <Ionicons
+      name={focused ? 'shield-checkmark' : 'shield-checkmark-outline'}
+      size={size}
+      color={color as string}
+    />
+  );
+}
 
-        {/* ===== مخفية من التاب بار ===== */}
-        <Tabs.Screen name="settings" options={{ href: null }} />
-        <Tabs.Screen name="calendar" options={{ href: null }} />
-        <Tabs.Screen name="index" options={{ href: null }} />
-        <Tabs.Screen name="surah/[id]" options={{ href: null }} />
-        <Tabs.Screen name="api/more" options={{ href: null }} />
-        <Tabs.Screen name="privacy-policy" options={{ href: null }} />
-        <Tabs.Screen name="styles" options={{ href: null }} />
-        <Tabs.Screen name="more" options={{ href: null }} />
-<Tabs.Screen name="api/askSheikh" options={{ href: null }} />
-      </Tabs>
-    </ThemeProvider>
+export default function Layout() {
+  const [fontsLoaded, fontError] = useFonts({
+    'Amiri-Regular': require('../assets/fonts/Amiri-Regular.ttf'),
+    'Amiri-Bold': require('../assets/fonts/Amiri-Bold.ttf'),
+    UthmanicHafs: require('../assets/fonts/UthmanicHafs.ttf'),
+  });
+
+  useEffect(() => {
+    if (fontError) {
+      console.error('[Layout] فشل تحميل الخطوط:', fontError);
+    }
+  }, [fontError]);
+
+  useEffect(() => {
+    if (fontsLoaded || fontError) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [fontsLoaded, fontError]);
+
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const dayId = response.notification.request.content.data?.dayId as string | undefined;
+
+      if (dayId) {
+        router.push({
+          pathname: '/athkar',
+          params: { dayId },
+        } as any);
+      }
+    });
+
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    import('@/utils/notifications').then(({ initializeAppNotifications }) => {
+      initializeAppNotifications().catch(() => {});
+    });
+  }, []);
+
+  useEffect(() => {
+    import('@/utils/hijriSync').then(({ loadCachedOffset, syncNajafOffset }) => {
+      loadCachedOffset().then(() => {
+        syncNajafOffset().catch(() => {});
+      });
+    });
+  }, []);
+
+  return (
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <TabsNavigator />
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+}
+
+function TabsNavigator() {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: {
+          position: 'absolute',
+          backgroundColor: 'transparent',
+          borderTopColor: 'transparent',
+          borderTopWidth: 0,
+          height: 65 + Math.max(insets.bottom, 12),
+          paddingBottom: 8 + Math.max(insets.bottom, 12),
+          paddingTop: 5,
+          elevation: 0,
+          ...(Platform.OS === 'web'
+            ? { backdropFilter: 'blur(14px)' } as any
+            : {}),
+        },
+        tabBarBackground: () => <GlassTabBarBackground />,
+        tabBarActiveTintColor: '#4da8da',
+        tabBarInactiveTintColor: 'rgba(255,255,255,0.55)',
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '600',
+        },
+      }}
+    >
+      <Tabs.Screen
+        name="tasbih"
+        options={{
+          title: 'التسبيح',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="filter-circle-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="adiyah"
+        options={{
+          title: 'الأدعية',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="heart-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="athkar"
+        options={{
+          title: 'الأذكار',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="moon-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="quran"
+        options={{
+          title: 'المصحف',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="book-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="dalil-almutaqeen"
+        options={{
+          title: 'دليل المتقين',
+          tabBarIcon: ({ color, size, focused }) => (
+            <GuideIcon size={size} color={color} focused={focused} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen name="settings" options={{ href: null }} />
+      <Tabs.Screen name="index" options={{ href: null }} />
+      <Tabs.Screen name="more" options={{ href: null }} />
+    </Tabs>
   );
 }

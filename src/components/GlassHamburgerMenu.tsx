@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { StyleSheet, TouchableOpacity } from 'react-native';
 
@@ -12,7 +11,6 @@ export default function GlassHamburgerMenu() {
   const router = useRouter();
 
   const handlePress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push('/settings');
   };
 
@@ -31,9 +29,3 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 });
-
-// ملاحظة مهمة: هذا الزر ما يفتح قائمة مدمجة جواه أبداً - يودّي مباشرة لصفحة
-// /settings الحقيقية (app/settings/index.tsx). هذا مقصود: كان عندنا نسخة قديمة
-// فيها قائمة كاملة مبنية هنا بستايل مختلف عن صفحة الإعدادات الحقيقية، وهذا كان
-// يسبب إحساس "لغط" (تفتح قائمة، ترجع، تطلع على قائمة ثانية شكلها مختلف).
-// هسه مصدر وحيد بس - هذا الزر وصفحة settings/index.tsx.

@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
+import * as Notifications from 'expo-notifications';
 import { useFocusEffect, useRouter } from 'expo-router';
 import {
   ExpoSpeechRecognitionModule,
@@ -16,7 +17,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -25,15 +25,23 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle as SvgCircle } from 'react-native-svg';
 
-import { CALENDAR_PREF_KEY, type CalendarPref } from '@/app/settings/calendar';
 import GlassHamburgerMenu from '@/components/GlassHamburgerMenu';
+import LogoIntroModal from '@/components/LogoIntroModal';
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
 import { getSelectedBackground } from '@/utils/backgroundSettings';
+import { getHijriParts, getOccasion } from '@/utils/hijriOccasions';
 
 // ===== باليت ثابتة =====
+// خط الآيات القرآنية - "خط عثماني" حقيقي محتاج ملف خط فعلي (متوفر مجاناً مثل
+// UthmanicHafs1 أو KFGQPC Uthman Taha Naskh) ينحمّل بـ useFonts (expo-font) بنفس
+// الاسم هذا بالضبط. لحد ما ينضاف الملف، RN يتجاهل fontFamily غير الموجود ويرجع
+// للخط الافتراضي تلقائياً وبأمان (ما يصير كراش) - فالستايل جاهز والتفعيل بس بإضافة الخط
+const QURAN_FONT_FAMILY = 'UthmanicHafs';
+
 const C = {
   navy: '#1C2B39',
   navyLight: '#27394A',
@@ -59,8 +67,6 @@ const DHIKR_GLOW: Record<string, string> = {
   tahlil: '#F25B8C',     // وردي
   hawqala: '#5BC9C9',    // فيروزي
   salawat: '#D9C45B',    // ذهبي
-  ruku: '#8CA5F2',       // أزرق بنفسجي
-  sujud: '#6ED9A8',       // أخضر فاتح
 };
 const getGlow = (id: string) =>
   DHIKR_GLOW[id] ?? (id.startsWith('custom_') ? '#9A9FAE' : C.neonBlue);
@@ -77,12 +83,12 @@ type DhikrType = {
 
 // ===== الأذكار الأساسية (موسّعة - هدف ٥) =====
 const BASE_DHIKR: DhikrType[] = [
-  { id: 'tasbih', label: 'تسبيح', sub: 'سُبْحَانَ الله', target: 33,
-    keywords: ['سبحان الله', 'سبحانه', 'تسبيح', 'سبحان'] },
+  { id: 'takbir', label: 'تكبير', sub: 'الله أَكْبَر', target: 34,
+    keywords: ['الله اكبر', 'الله أكبر', 'تكبير', 'اكبر'] },
   { id: 'tahmid', label: 'تحميد', sub: 'الحَمْدُ لله', target: 33,
     keywords: ['الحمد لله', 'حمدلله', 'الحمدلله', 'الحمد'] },
-  { id: 'takbir', label: 'تكبير', sub: 'الله أَكْبَر', target: 33,
-    keywords: ['الله اكبر', 'الله أكبر', 'تكبير', 'اكبر'] },
+  { id: 'tasbih', label: 'تسبيح', sub: 'سُبْحَانَ الله', target: 33,
+    keywords: ['سبحان الله', 'سبحانه', 'تسبيح', 'سبحان'] },
   { id: 'istighfar', label: 'استغفار', sub: 'أَسْتَغْفِرُ الله', target: 100,
     keywords: ['استغفر الله', 'أستغفر الله', 'استغفرالله', 'استغفر'] },
   { id: 'tahlil', label: 'تهليل', sub: 'لَا إِلٰهَ إِلَّا الله', target: 100,
@@ -91,12 +97,6 @@ const BASE_DHIKR: DhikrType[] = [
     keywords: ['لا حول ولا قوة الا بالله', 'لا حول ولا قوة', 'حول ولا قوة'] },
   { id: 'salawat', label: 'صلوات', sub: 'اللَّهُمَّ صَلِّ عَلَى مُحَمَّد', target: 100,
     keywords: ['اللهم صل على محمد', 'صلي على محمد', 'صل على محمد وآل محمد'] },
-  { id: 'ruku', label: 'تسبيح الركوع', sub: 'سُبْحَانَ رَبِّيَ الْعَظِيمِ وَبِحَمْدِهِ', target: 3,
-    // نكتب العبارة كاملة بس (بدون اختصار) حتى ما تتلابس مع "سبحان الله" ولا مع تسبيح السجود -
-    // الاثنين يبدون بنفس الكلمتين (سبحان ربي) فلازم العبارة تكتمل كاملة قبل ما تنحسب
-    keywords: ['سبحان ربي العظيم وبحمده', 'سبحان ربي العظيم و بحمده'] },
-  { id: 'sujud', label: 'تسبيح السجود', sub: 'سُبْحَانَ رَبِّيَ الْأَعْلَى وَبِحَمْدِهِ', target: 3,
-    keywords: ['سبحان ربي الاعلى وبحمده', 'سبحان ربي الأعلى وبحمده', 'سبحان ربي الاعلى و بحمده'] },
 ];
 
 // ===== تذكيرات اليوم =====
@@ -150,6 +150,13 @@ const STORAGE_KEY   = '@tasbih_data_v4';
 const ARCHIVE_KEY   = '@tasbih_archive_v1';
 const DAILY_KEY      = '@tasbih_daily_v1';
 const SOUND_PREF_KEY = '@tasbih_sound_v1';
+// نفس المفتاح المستخدم بمفتاح "الاهتزاز" بشاشة إعدادات التطبيق (app-settings.tsx)
+// حتى يصير المفتاحين مصدر واحد بدل توفر مفتاحين منفصلين ما يشتغل غير وحد منهم
+const VIBRATION_PREF_KEY = '@app_vibration_v1';
+// نفس المفتاح والقيم المستخدمة بـ app/settings/calendar.tsx (CALENDAR_PREF_KEY / CalendarPref)
+// - محلي هنا بدل استيراد شاشة كاملة داخل شاشة التسبيح
+const CALENDAR_PREF_KEY = '@calendar_display_pref';
+type CalendarPref = 'both' | 'hijri' | 'gregorian';
 const ONBOARD_KEY    = '@tasbih_onboard_seen_v1';
 
 // ===== ملاحظات لأول مرة - توضح كل جزء بالواجهة ببساطة، تختفي بعد أول فتح =====
@@ -170,7 +177,10 @@ const GROQ_PROXY_URL = process.env.EXPO_PUBLIC_GROQ_PROXY_URL ?? '';
 // رأس سري خفيف يميز طلبات تطبيقك عن أي طلب عشوائي يوصل لعنوان الـ Worker (مو حماية كاملة، بس رادع بسيط)
 const APP_SHARED_SECRET = process.env.EXPO_PUBLIC_APP_SHARED_SECRET ?? '';
 const MAX_CUSTOM    = 5;      // أقصى عدد كاردات تسبيح مخصصة ظاهرة بنفس وقت (هدف ٥)
-const SIM_HIGH      = 0.80;   // ثقة عالية = اعتماد مباشر
+const SIM_HIGH      = 0.68;   // ثقة عالية = اعتماد مباشر (خُفِّضت من 0.80: بصوت هادئ محرك
+                               // التعرف الصوتي يرجع نص فيه أخطاء تفريغ بسيطة فتوصل الدرجة
+                               // 0.6-0.75 رغم إن الذكر قيل صح؛ التخفيف آمن لأن bestLocalMatch
+                               // أصلاً يشترط كلمتين متتاليتين قبل قبول أي تطابق جزئي)
 const SIM_LOW       = 0.45;   // أقل من هذا = ذكر جديد كلياً
 const VOICE_DEBOUNCE = 0;     // استجابة فورية بنفس سرعة الكلام
 
@@ -179,43 +189,99 @@ const SPEECH_OPTIONS = {
   lang: 'ar-IQ',
   interimResults: true,
   continuous: true,
-  maxAlternatives: 1, // بديل واحد فقط - يمنع تكرار العد لنفس الجملة
+  // 3 بدائل بدل بديل وحد - يتيح لنا نختار الأدق تطابقاً مع الأذكار بدل الاعتماد على
+  // أول تفريغ يرجعه المحرك (اللي يطلع مشوّه أكثر بصوت هادئ/بعيد عن المايك)
+  maxAlternatives: 3,
+  volumeChangeEventOptions: { enabled: true, intervalMillis: 150 },
 } as const;
 
+// قيمة volumechange تتراوح تقريباً بين -2 و 10 - أي شي تحت 0 يعتبر غير مسموع تقريباً
+const VOLUME_MIN = -2;
+const VOLUME_MAX = 10;
+const VOLUME_AUDIBLE_THRESHOLD = 0.5;
+
 // ===== Utils =====
-const getDayIndex = () =>
-  Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+const getDayIndex = (date: Date = new Date()) =>
+  Math.floor((date.getTime() - new Date(date.getFullYear(), 0, 0).getTime()) / 86400000);
 
 const getTodayVerse = () => DAILY_VERSES[getDayIndex() % DAILY_VERSES.length];
 const getTodayQuote = () => DAILY_QUOTES[getDayIndex() % DAILY_QUOTES.length];
+const getVerseForDate = (date: Date) => DAILY_VERSES[getDayIndex(date) % DAILY_VERSES.length];
+const getQuoteForDate = (date: Date) => DAILY_QUOTES[getDayIndex(date) % DAILY_QUOTES.length];
 
-// ===== أجزاء التاريخ (هجري فوق / ميلادي تحت، بدون تكرار "هـ") =====
+// ===== إشعار يومي بآية وكلمة اليوم - الساعة ٨ صباحاً محلياً =====
+// إشعارات الجدولة المحلية محتواها ثابت وقت الجدولة نفسها (ما فيها منطق يشتغل وقت
+// الإطلاق الفعلي)، فحتى يتغيّر المحتوى فعلاً كل يوم، نجدول نافذة أيام قادمة دفعة وحدة
+// (كل يوم بمحتواه الصحيح المحسوب له بالضبط)، ونعيد المزامنة (نلغي القديم ونجدول من جديد)
+// كل ما يفتح المستخدم التطبيق - فتضل النافذة ممتدة حتى لو غاب أيام عن فتحه
+const DAILY_NOTIF_TAG = 'daily-verse';
+const DAILY_NOTIF_DAYS_AHEAD = 14;
+
+async function syncDailyVerseNotifications() {
+  try {
+    const { status: existing } = await Notifications.getPermissionsAsync();
+    let granted = existing === 'granted';
+    if (!granted) {
+      const { status } = await Notifications.requestPermissionsAsync();
+      granted = status === 'granted';
+    }
+    if (!granted) return;
+
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync(DAILY_NOTIF_TAG, {
+        name: 'آية وكلمة اليوم',
+        importance: Notifications.AndroidImportance.DEFAULT,
+      });
+    }
+
+    // نلغي بس الإشعارات اللي جدولناها احنا بهذا الوسم - ما نأثر على أي إشعار
+    // ثاني بالتطبيق (تذكير أذكار أو صلاة مثلاً لو انضاف مستقبلاً)
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    await Promise.all(
+      scheduled
+        .filter((n) => n.content.data?.tag === DAILY_NOTIF_TAG)
+        .map((n) => Notifications.cancelScheduledNotificationAsync(n.identifier))
+    );
+
+    const now = new Date();
+    for (let i = 0; i < DAILY_NOTIF_DAYS_AHEAD; i++) {
+      const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, 8, 0, 0);
+      if (day.getTime() <= now.getTime()) continue; // فات الساعة ٨ اليوم -> أول موعد يصير باچر
+      const v = getVerseForDate(day);
+      const q = getQuoteForDate(day);
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'آية وكلمة اليوم 🕊️',
+          body: `${v.text}\n\n"${q.text}" — ${q.author}`,
+          data: { tag: DAILY_NOTIF_TAG },
+        },
+        trigger: { date: day } as any,
+      });
+    }
+  } catch {
+    // فشل الجدولة (صلاحية مرفوضة، منصة ويب بدون دعم...) - نتجاهل بصمت، التطبيق يشتغل عادي بدونها
+  }
+}
+
+// ===== أجزاء التاريخ (هجري فوق / ميلادي تحت) =====
+// ملاحظة مهمة: كان هذا يعتمد على Intl.DateTimeFormat({calendar:'islamic-civil'})
+// اللي دعمها ناقص/غير موجود على محرك Hermes ببعض أجهزة أندرويد (يرجع فاضي بصمت)
+// - نفس المشكلة اللي انحلت بشاشة التقويم. صار يستخدم نفس مصدر الحساب الموثوق
+// (hijriOccasions.ts) حتى التاريخ يتطابق بين الشاشة الرئيسية وشاشة التقويم تماماً.
 const getDateParts = () => {
   const d = new Date();
   const days   = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
   const months = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
   const gregorian = `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} م`;
 
-  let hijri = '';
-  try {
-    // ملاحظة: Intl.DateTimeFormat بالتقويم الهجري يرجع "هـ" ضمن النص تلقائياً،
-    // لذا ما نضيفها مرة ثانية (هذا كان سبب تكرار "هـ هـ" سابقاً)
-    const hijriFormatter = new Intl.DateTimeFormat('ar', {
-      calendar: 'islamic-civil',
-      numberingSystem: 'arab',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
-    hijri = hijriFormatter.format(d);
-  } catch {
-    hijri = '';
-  }
+  const { day, month, year } = getHijriParts(d);
+  const hijri = `${toArabicDigits(day)} ${month} ${toArabicDigits(year)} هـ`;
+  const occasion = getOccasion(month, day);
 
-  return { hijri, gregorian };
+  return { hijri, gregorian, occasion };
 };
 
-function toArabicDigits(num: number): string {
+function toArabicDigits(num: number | string): string {
   const ar = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
   return String(num).replace(/[0-9]/g, (d) => ar[parseInt(d, 10)]);
 }
@@ -255,8 +321,20 @@ function similarity(a: string, b: string): number {
 
 // جذور لازم يحتوي عليها الكلام حتى نعتبره "ذكر" من الأساس (يمنع اعتبار أي كلام عشوائي تسبيحاً)
 const ISLAMIC_ROOTS = ['الله', 'سبحان', 'حمد', 'اكبر', 'استغفر', 'قوه', 'حول', 'صل', 'محمد', 'كريم', 'رحيم', 'عظيم'];
-function looksIslamic(normText: string): boolean {
-  return ISLAMIC_ROOTS.some((r) => normText.includes(r));
+function looksIslamic(normText: string, dhikrList?: DhikrType[]): boolean {
+  if (ISLAMIC_ROOTS.some((r) => normText.includes(r))) return true;
+  // أي ذكر مخصص المستخدم نفسه ضافه صراحة (مثل "يا علي" أو أي دعاء غير مشمول بالجذور العامة
+  // أعلاه) يُعتبر ذكراً مباشرة بدون فحص الجذور - لأن المستخدم صرّح بيه وقت الإضافة اليدوية
+  if (dhikrList) {
+    for (const d of dhikrList) {
+      if (!d.isCustom) continue;
+      for (const kw of d.keywords) {
+        const nkw = normalizeArabic(kw);
+        if (nkw && (normText.includes(nkw) || nkw.includes(normText))) return true;
+      }
+    }
+  }
+  return false;
 }
 
 // أفضل تطابق محلي لنص معيّن مقابل قائمة الأذكار (يرجع أيضاً الكلمة المطابقة لعد التكرار - هدف ٧)
@@ -266,6 +344,7 @@ function bestLocalMatch(text: string, dhikrList: DhikrType[]) {
   let bestId = '';
   let bestScore = 0;
   let bestKeyword = '';
+  let bestKeywordWords = 0;
 
   // نفحص *كل* الأذكار ونختار الأدق تطابق - مو نوقف عند أول وحدة نلگاها (هذا كان الباگ الأساسي:
   // كلمة مشتركة بين ذكرين، زي "لا" بين "لا اله الا الله" و"لا حول ولا قوة"، كانت تخلي الكود
@@ -295,14 +374,66 @@ function bestLocalMatch(text: string, dhikrList: DhikrType[]) {
         score = similarity(norm, nkw);
       }
 
-      if (score > bestScore) {
+      // عند تعادل الدرجة بالضبط (مثلاً كلمة عامة قصيرة مقابل عبارة أطول لذكر ثاني)،
+      // نفضّل الكلمة المفتاحية الأطول لأنها أدق وأقل عمومية - حماية عامة من تعارض الكلمات القصيرة
+      const isBetter =
+        score > bestScore ||
+        (score === bestScore && nkwWords.length > bestKeywordWords);
+
+      if (isBetter) {
         bestScore = score;
         bestId = d.id;
         bestKeyword = nkw;
+        bestKeywordWords = nkwWords.length;
       }
     }
   }
   return { id: bestId, score: bestScore, keyword: bestKeyword };
+}
+
+// ===== تعارض "بداية مطابقة" مع ذكر أطول =====
+// لو ذكر مخصص طويل يبدأ بنفس كلمات ذكر ثابت قصير بالضبط (مثال: الذكر المخصص "لا اله الا الله
+// سبحانك اني كنت من الظالمين" يبدأ بنفس كلمات ذكر "تهليل" الثابت "لا اله الا الله")، فأول مقطع
+// كلام يوصل يطابق الذكر القصير تطابقاً تاماً (0.99) ومحتمل بنفس الوقت يكون بس "بداية" الذكر
+// الطويل. هذا الفحص يلگي أطول ذكر بالقائمة كلماته تبدأ بنفس كلمات الذكر المطابق حالياً بالضبط.
+function findLongerPrefixCollision(
+  matchedKeywordWords: string[],
+  matchedId: string,
+  list: DhikrType[]
+): { dhikr: DhikrType; keywordWords: string[] } | null {
+  let best: { dhikr: DhikrType; keywordWords: string[] } | null = null;
+  for (const d of list) {
+    if (d.id === matchedId) continue;
+    for (const kw of d.keywords) {
+      const words = normalizeArabic(kw).split(' ').filter(Boolean);
+      if (words.length <= matchedKeywordWords.length) continue;
+      const isPrefix = matchedKeywordWords.every((w, i) => words[i] === w);
+      if (isPrefix && (!best || words.length > best.keywordWords.length)) {
+        best = { dhikr: d, keywordWords: words };
+      }
+    }
+  }
+  return best;
+}
+
+// ===== اختيار أفضل بديل من عدة بدائل يرجعها محرك التعرف الصوتي لنفس المقطع =====
+// بصوت هادئ/نسائي، أول بديل (results[0]) غالباً يطلع فيه أخطاء تفريغ (transcription)
+// بينما بديل تاني أو ثالث يطابق الذكر بدقة أعلى - قبل هذا كان الكود ياخذ بس البديل الأول
+// ويتجاهل الباقي كلياً، وهذا سبب رئيسي لعدم التبديل بصوت هادئ (هدف: تحسين حساسية المايك)
+function pickBestAlternative(alts: string[], dhikrList: DhikrType[]): string {
+  if (alts.length === 0) return '';
+  if (alts.length === 1) return alts[0];
+  let best = alts[0];
+  let bestScore = -1;
+  for (const alt of alts) {
+    if (!alt) continue;
+    const { score } = bestLocalMatch(alt, dhikrList);
+    if (score > bestScore) {
+      bestScore = score;
+      best = alt;
+    }
+  }
+  return best;
 }
 
 // عد تكرار عبارة (ذكر) داخل نص واحد - يدعم حالة "قال نفس الذكر مرتين بثانية واحدة" (هدف ٧)
@@ -319,6 +450,33 @@ function countRepeats(normText: string, normKeyword: string): number {
     }
   }
   return Math.max(count, 1);
+}
+
+// قص عنوان الذكر المخصص بحدود الكلمة (مو نص حرف بنص كلمة) + "…" إذا انقص فعلاً
+function truncateLabel(text: string, maxLen = 8): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxLen) return trimmed;
+  const slice = trimmed.slice(0, maxLen);
+  const lastSpace = slice.lastIndexOf(' ');
+  const cut = lastSpace > 0 ? slice.slice(0, lastSpace) : slice;
+  return cut + '…';
+}
+
+// فحص خفيف للاتصال بالإنترنت (بدون أي مكتبة إضافية) - يُستخدم لتحذير لطيف عند فتح المايك
+// generate_204 نفس الرابط اللي أندرويد يستخدمه داخلياً للتأكد من الاتصال، رابط خفيف وموثوق
+async function checkNetworkReachable(timeoutMs = 2500): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch('https://www.gstatic.com/generate_204', {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    return res.ok || res.status === 204;
+  } catch {
+    return false;
+  }
 }
 
 // ===== Groq API (يُستخدم كحكم احتياطي فقط بحالة الثقة المتوسطة) =====
@@ -379,8 +537,8 @@ const matchDhikr = async (
 ): Promise<{ result: string; repeats: number }> => {
   const norm = normalizeArabic(text);
 
-  // حارس أساسي: إذا الكلام مالة أي علاقة بذكر إسلامي، تجاهله كلياً (تصحيح اللغط)
-  if (!looksIslamic(norm)) {
+  // حارس أساسي: إذا الكلام مالة أي علاقة بذكر إسلامي ولا بذكر مخصص، تجاهله كلياً (تصحيح اللغط)
+  if (!looksIslamic(norm, dhikrList)) {
     return { result: 'none', repeats: 1 };
   }
 
@@ -393,7 +551,16 @@ const matchDhikr = async (
   if (score >= SIM_LOW && id) {
     const groqResult = await askGroq(text, dhikrList);
     if (groqResult && groqResult !== 'none') {
-      return { result: groqResult, repeats: countRepeats(norm, keyword) };
+      // "new:نص" حالة صحيحة دايماً (ذكر جديد كلياً) - نقبلها مباشرة
+      if (groqResult.startsWith('new:')) {
+        return { result: groqResult, repeats: countRepeats(norm, keyword) };
+      }
+      // غير هيچي، لازم نتأكد إن الـ id اللي رجعته Groq موجود فعلاً بالقائمة -
+      // قبل هذا التحقق، أي رد غير متوقع من الموديل (id غلط أو غير مطابق) كان
+      // يخلي العدة تضيع بصمت لأن الكود يدور عن ذكر مو موجود وما يلگه
+      if (dhikrList.some((d) => d.id === groqResult)) {
+        return { result: groqResult, repeats: countRepeats(norm, keyword) };
+      }
     }
     return { result: id, repeats: countRepeats(norm, keyword) };
   }
@@ -471,11 +638,6 @@ function ProgressRing({
             height: celebrating ? 14 : 10,
             borderRadius: 8,
             backgroundColor: color,
-            shadowColor: color,
-            shadowOpacity: 1,
-            shadowRadius: celebrating ? 14 : 8,
-            shadowOffset: { width: 0, height: 0 },
-            elevation: 10,
           }}
         />
       )}
@@ -568,17 +730,22 @@ export default function TasbihScreen() {
   const router = useRouter();
   const { fontScale, backgroundId } = useThemeContext();
   const { width, height } = useWindowDimensions();
+  // ارتفاع الستيتس بار الحقيقي لكل جهاز (يختلف أندرويد عن آيفون، وحتى بين أجهزة أندرويد
+  // نفسها حسب وجود كاميرا مخرومة بالشاشة أو لا) - هذا كان الفاضي بالكود قبل، والسبب
+  // الحقيقي وراء تراكب الساعة/الشبكة فوق الهيدر بأجهزة أندرويد تحديداً
+  const insets = useSafeAreaInsets();
 
   const isTablet  = width >= 700;
   const isDesktop = width >= 1024;
   const circleSize = isDesktop ? 300 : isTablet ? 280 : 220;
+  const FOCUS_CIRCLE_SIZE = isDesktop ? 240 : isTablet ? 220 : 180;
   const circleFont = isDesktop ? 78  : isTablet ? 72  : 58;
 
   const bgOption = getSelectedBackground(backgroundId);
 
   const styles = useMemo(
-    () => createStyles(fontScale, isTablet, isDesktop, circleSize, circleFont, height),
-    [fontScale, isTablet, isDesktop, circleSize, circleFont, height]
+    () => createStyles(fontScale, isTablet, isDesktop, circleSize, circleFont, height, FOCUS_CIRCLE_SIZE),
+    [fontScale, isTablet, isDesktop, circleSize, circleFont, height, FOCUS_CIRCLE_SIZE]
   );
 
   // ===== State =====
@@ -588,6 +755,13 @@ export default function TasbihScreen() {
   );
   const [activeTab,   setActiveTab]   = useState(0);
   const [moreOpen,    setMoreOpen]    = useState(false);
+  const [showLogoIntro, setShowLogoIntro] = useState(false);
+  // يتحول true مرة وحدة بس (أول ضغطة على الشعار) وما يرجع أبداً false - هذا
+  // يمنع تحميل مشغّل الفيديو (useVideoPlayer) فور فتح التطبيق، ويخليه يتحمّل
+  // بس أول مرة المستخدم يضغط فعلياً على الشعار. بدون هذا، المكوّن كان
+  // يتحمّل مع الشاشة الرئيسية مباشرة حتى لو مخفي - وهذا سبب كراش السبلاش
+  // القديم بالضبط (تحميل مكتبة فيديو بأخطر لحظة: فتح التطبيق)
+  const [logoIntroMounted, setLogoIntroMounted] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [lastWord,     setLastWord]   = useState('');
   const [verse] = useState(getTodayVerse());
@@ -599,21 +773,34 @@ export default function TasbihScreen() {
   const [dailyModalOpen, setDailyModalOpen] = useState(false);
   const [soundOn,     setSoundOn]     = useState(true);
   const [composerText, setComposerText] = useState('');
+  const [composerTarget, setComposerTarget] = useState('33');
   const [onboardOpen, setOnboardOpen] = useState(false);
-  const [calendarPref, setCalendarPref] = useState<CalendarPref>('both');
+  // ===== وضع التركيز (تسبيح منفصل للأذكار المضافة) =====
+  // لما مفعّل، المايك يسمع بس الذكر المضاف هذا ويتجاهل الأذكار الثابتة كلياً - والعكس:
+  // المايك الأساسي (وضع التركيز مغلق) يسمع بس الأذكار الثابتة ويتجاهل أي ذكر مضاف
+  const [focusDhikrId, setFocusDhikrId] = useState<string | null>(null);
 
   // ===== Refs =====
   const countsRef       = useRef(counts);
   const dhikrListRef    = useRef(dhikrList);
+  // نطاق المطابقة الصوتية الفعّال حالياً - أذكار ثابتة بس بالوضع العادي، أو الذكر
+  // المركّز عليه بس بوضع التركيز. كل دوال المطابقة (bestLocalMatch/looksIslamic/matchDhikr)
+  // لازم تستخدم هذا الـ ref بدل dhikrListRef.current حتى الفصل يصير حقيقي وكامل
+  const matchScopeRef   = useRef<DhikrType[]>([]);
+  const focusPrevTabRef = useRef(0); // نحفظ فيه التبويب النشط قبل فتح وضع التركيز لنرجعله عند الخروج
   const isListeningRef  = useRef(false);
   const lastCountTime   = useRef(0);
   const circleScale     = useRef(new Animated.Value(1)).current;
   const countScale      = useRef(new Animated.Value(1)).current;
   const ringProgress    = useRef(new Animated.Value(0)).current;
+  const focusRingProgress = useRef(new Animated.Value(0)).current; // حلقة تقدّم مستقلة لوضع التركيز
   const leftArrowScale  = useRef(new Animated.Value(1)).current;
   const rightArrowScale = useRef(new Animated.Value(1)).current;
   const dailyTotalRef   = useRef(0);
   const streakRef       = useRef(0);
+  // يمنع زيادة الـ streak أكثر من مرة بنفس اليوم لو العدد اليومي رجع صفر (تراجع) وبعدين
+  // زاد من جديد - قبل هذا كان أي رجوع للصفر ثم عدة جديدة يزيد الـ streak غلط بنفس اليوم
+  const streakBumpedTodayRef = useRef(false);
   const dailyBreakdownRef = useRef<Record<string, number>>({});
   // ===== الـ "Liquid Pill" المتحرك خلف التبويب النشط =====
   const tabLayoutsRef = useRef<Record<number, { x: number; width: number }>>({});
@@ -621,6 +808,8 @@ export default function TasbihScreen() {
   const pillWidth  = useRef(new Animated.Value(0)).current;
   const pillReady  = useRef(false); // يمنع ظهور الـ pill بمكان غلط قبل ما نعرف مواقع التبويبات
   const soundOnRef      = useRef(true);
+  const vibrationOnRef  = useRef(true);
+  const [calendarPref, setCalendarPref] = useState<CalendarPref>('both');
   const audioCtxRef     = useRef<any>(null);
   const touchStartRef    = useRef({ x: 0, y: 0, time: 0 });
   const longPressTimerRef = useRef<any>(null);
@@ -630,26 +819,56 @@ export default function TasbihScreen() {
   useEffect(() => { dhikrListRef.current = dhikrList; }, [dhikrList]);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
 
+  // تحديث نطاق المطابقة الصوتية كل ما يتغيّر وضع التركيز أو قائمة الأذكار
+  useEffect(() => {
+    if (focusDhikrId) {
+      const f = dhikrList.find((d) => d.id === focusDhikrId);
+      matchScopeRef.current = f ? [f] : [];
+    } else {
+      matchScopeRef.current = dhikrList.filter((d) => !d.isCustom);
+    }
+    // تبديل النطاق = لازم نصفّر أي حالة معلقة من النطاق القديم حتى ما تختلط وياه
+    lastCommittedRef.current = null;
+    clearPendingFallback();
+    deferredIdxRef.current = null;
+  }, [dhikrList, focusDhikrId]);
+
+  // فتح/إغلاق وضع التركيز - يحفظ ويرجّع التبويب الأساسي تلقائياً
+  const openFocusMode = (id: string) => {
+    focusPrevTabRef.current = activeTab;
+    setFocusDhikrId(id);
+  };
+  const closeFocusMode = () => {
+    setFocusDhikrId(null);
+    setActiveTab(focusPrevTabRef.current);
+  };
+
   useEffect(() => {
     loadData();
     loadDailyAndStreak();
     loadSoundPref();
+    loadVibrationPref();
+    syncDailyVerseNotifications();
     AsyncStorage.getItem(ONBOARD_KEY).then((seen) => {
       if (!seen) setOnboardOpen(true);
     }).catch(() => {});
     return () => {
       isListeningRef.current = false;
+      clearPendingFallback();
+      deferredIdxRef.current = null;
       try { ExpoSpeechRecognitionModule.stop(); } catch {}
     };
   }, []);
 
-  // نعيد قراءة تفضيل عرض التاريخ (هجري/ميلادي/الاثنين) كل مرة تفتح هذي الشاشة،
-  // حتى ينعكس أي تغيير سواه المستخدم بشاشة الإعدادات > التقويم فوراً لما يرجع
+  // يحدّث إعداد عرض التقويم (هجري/ميلادي/الاثنين) والاهتزاز كل ما ترجع لهذي
+  // الشاشة - مهم خصوصاً بعد ما يغيّر المستخدم الإعداد بشاشة settings/calendar
+  // ويرجع، لأن الشاشة ما تنعاد mount من جديد بس تستعيد التركيز (focus)
   useFocusEffect(
     useCallback(() => {
       AsyncStorage.getItem(CALENDAR_PREF_KEY).then((v) => {
         if (v) setCalendarPref(v as CalendarPref);
       }).catch(() => {});
+      loadVibrationPref();
     }, [])
   );
 
@@ -677,6 +896,7 @@ export default function TasbihScreen() {
         setDailyTotal(0); setStreak(0);
         dailyTotalRef.current = 0; streakRef.current = 0;
         setDailyBreakdown({}); dailyBreakdownRef.current = {};
+        streakBumpedTodayRef.current = false;
         return;
       }
       const data = JSON.parse(raw);
@@ -687,6 +907,8 @@ export default function TasbihScreen() {
         streakRef.current = data.streak ?? 0;
         setDailyBreakdown(data.breakdown ?? {});
         dailyBreakdownRef.current = data.breakdown ?? {};
+        // إذا اليوم عنده مجموع مسبقاً، يعني الـ streak انزاد مسبقاً اليوم - ما نزيده مرة ثانية
+        streakBumpedTodayRef.current = (data.total ?? 0) > 0;
       } else {
         // يوم جديد: العداد اليومي والتفصيل يصفرون، والـ streak يستمر بس أول ما يسبح اليوم (بينحسب بـ bumpDailyTotal)
         const streakContinues = data.date === yesterdayKey();
@@ -695,6 +917,7 @@ export default function TasbihScreen() {
         dailyTotalRef.current = 0;
         streakRef.current = streakContinues ? (data.streak ?? 0) : 0;
         setDailyBreakdown({}); dailyBreakdownRef.current = {};
+        streakBumpedTodayRef.current = false;
       }
     } catch {}
   };
@@ -702,13 +925,15 @@ export default function TasbihScreen() {
   // يُستدعى مع كل عدة (زيادة أو تراجع) حتى يبقى العداد اليومي والـ streak وتفصيل كل ذكر محدّثين
   const bumpDailyTotal = async (delta: number, dhikrId?: string) => {
     const today = todayKey();
-    const wasZero = dailyTotalRef.current <= 0;
     const newTotal = Math.max(0, dailyTotalRef.current + delta);
     let newStreak = streakRef.current;
 
-    // أول عدة باليوم (بعد ما كان صفر) = يوم نشط جديد -> زيادة الـ streak
-    if (wasZero && delta > 0) {
-      newStreak = streakRef.current + (streakRef.current === 0 ? 1 : 1);
+    // أول عدة فعلية باليوم (ولسا ما انزاد الـ streak اليوم) = يوم نشط جديد -> زيادة الـ streak
+    // نعتمد على العلم streakBumpedTodayRef مو على "وصل صفر" لوحدها، حتى لو المستخدم راجع
+    // (undo) لين رجع العداد اليومي صفر وبعدين كمل تسبيح، الـ streak ما ينزاد مرتين بنفس اليوم
+    if (delta > 0 && !streakBumpedTodayRef.current) {
+      newStreak = streakRef.current + 1;
+      streakBumpedTodayRef.current = true;
     }
 
     dailyTotalRef.current = newTotal;
@@ -749,27 +974,67 @@ export default function TasbihScreen() {
     try { await AsyncStorage.setItem(SOUND_PREF_KEY, next ? '1' : '0'); } catch {}
   };
 
-  // نقرة صوتية ناعمة جداً عند كل عدة - مبنية بـ Web Audio API (شغالة على الويب حالياً)
-  // ملاحظة للموبايل: لما تربط @react-native-voice/voice وتسوي بيلد حقيقي، بدّل هذي بمكتبة
-  // expo-audio أو expo-av وشغّل ملف صوت قصير (tick.mp3) بدل الـ oscillator
+  // ===== تفضيل الاهتزاز (يُقرأ ويُكتب بنفس مفتاح شاشة إعدادات التطبيق) =====
+  const loadVibrationPref = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(VIBRATION_PREF_KEY);
+      vibrationOnRef.current = raw === null ? true : raw === '1';
+    } catch {}
+  };
+  // يلف أي نداء Haptics.* ويشغّله فقط إذا الاهتزاز مفعّل من الإعدادات
+  const triggerHaptic = (fn: () => void | Promise<void>) => {
+    if (vibrationOnRef.current) fn();
+  };
+
+  // نقرة صوتية عند كل عدة - على الويب: نغمة مبنية مباشرة بـ Web Audio API.
+  // على الموبايل (أندرويد/آيفون): نشغّل ملف صوتي قصير عبر expo-audio (متوافقة مع SDK 56).
+  // ⚠️ يشترط وجود ملف tick.mp3 بمسار src/assets/sounds/tick.mp3 - نقرة قصيرة جداً (٥٠-١٠٠ ملي ثانية)
+  // كافية. بدون هذا الملف الفعلي، السطر تحت (require) بيسبب خطأ بناء (Metro) - لازم تضيف
+  // الملف أول قبل لا تشغّل بيلد. جيب أي نقرة "click/tick" مجانية من freesound.org أو mixkit.co
+  const tickPlayerRef = useRef<any>(null);
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { createAudioPlayer } = require('expo-audio');
+      tickPlayerRef.current = createAudioPlayer(require('../assets/sounds/tick.mp3'));
+    } catch {
+      // الملف/المكتبة مو موجودين هسه - نتجاهل بصمت حتى ما نكرش التطبيق، وصوت النقرة
+      // يبقى معطل بالموبايل لغاية ما يتضاف الملف (نفس الوضع الحالي بالضبط)
+      tickPlayerRef.current = null;
+    }
+    return () => {
+      try { tickPlayerRef.current?.remove?.(); } catch {}
+    };
+  }, []);
+
   const playTick = () => {
     if (!soundOnRef.current) return;
-    if (Platform.OS !== 'web') return;
+    if (Platform.OS === 'web') {
+      try {
+        const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtx) return;
+        if (!audioCtxRef.current) audioCtxRef.current = new AudioCtx();
+        const ctx = audioCtxRef.current;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.06, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.08);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.08);
+      } catch {}
+      return;
+    }
+    // موبايل: نرجع لبداية الملف ونشغّله من جديد كل عدة (يسمح بنقرات متلاحقة بسرعة)
     try {
-      const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      if (!audioCtxRef.current) audioCtxRef.current = new AudioCtx();
-      const ctx = audioCtxRef.current;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = 880;
-      gain.gain.setValueAtTime(0.06, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.08);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.08);
+      const player = tickPlayerRef.current;
+      if (!player) return;
+      player.seekTo(0);
+      player.play();
     } catch {}
   };
 
@@ -829,12 +1094,25 @@ export default function TasbihScreen() {
   };
 
   // ===== إضافة ذكر جديد تلقائياً (مع حد أقصى للكاردات الظاهرة - هدف ٥) =====
-  const addCustomDhikr = async (text: string): Promise<DhikrType> => {
+  const addCustomDhikr = async (text: string, target: number = 33): Promise<DhikrType> => {
     const id    = 'custom_' + Date.now();
-    const label = text.slice(0, 8);
+    const label = truncateLabel(text);
+    const normFull = normalizeArabic(text);
+    const words = normFull.split(' ').filter(Boolean);
+    // كلمات رابطة/نداء عامة جداً ومكررة ببداية كثير من الأذكار (خصوصاً صيغة
+    // "يا فلان" بأسماء الله الحسنى) - ما نعتمدها وحدها ككلمة مفتاحية مختصرة
+    // لأنها لو انقالت لحالها ما تميز هذا الذكر عن غيره، ولو غابت عن الكلام
+    // (مثلاً المستخدم گال "كريم" بس بدون "يا") ما ننتبه للكلمة المميزة الفعلية
+    const FILLER_WORDS = new Set(['يا', 'لا', 'ال', 'و', 'ف', 'ب', 'يالله', 'اللهم']);
+    // نختار أول كلمة "مميزة" (مو من كلمات الربط) وطولها كافي - هذي هي الكلمة
+    // اللي لو انقالت لحالها (بوجود "يا" او بدونها) لازم تكفي لعدّ الذكر
+    const shortWord =
+      words.find((w) => !FILLER_WORDS.has(w) && w.length >= 2) ?? words[0] ?? '';
+    const keywords =
+      shortWord && shortWord !== normFull ? [normFull, shortWord] : [normFull];
     const newD: DhikrType = {
-      id, label, sub: text, target: 33,
-      keywords: [normalizeArabic(text)],
+      id, label, sub: text, target: Math.max(1, Math.min(99999, Math.round(target) || 33)),
+      keywords,
       isCustom: true,
     };
 
@@ -843,9 +1121,17 @@ export default function TasbihScreen() {
 
     const customCount = newList.filter((d) => d.isCustom).length;
     if (customCount > MAX_CUSTOM) {
+      // نحفظ اسم الأقدم قبل الأرشفة حتى نگدر نبلغ المستخدم بالضبط شنو انأرشف
+      const oldestLabel = newList.filter((d) => d.isCustom)[0]?.label;
       const archived = await archiveOldestCustom(newList, newCounts);
       newList   = archived.list;
       newCounts = archived.cnts;
+      if (oldestLabel) {
+        Alert.alert(
+          'تم أرشفة ذكر قديم',
+          `وصلت الحد الأقصى (${MAX_CUSTOM}) أذكار مخصصة، فتم أرشفة "${oldestLabel}" تلقائياً لإفساح المجال للذكر الجديد. تگدر تلگاه بأرشيف الأذكار.`
+        );
+      }
     }
 
     setDhikrList(newList);
@@ -854,18 +1140,52 @@ export default function TasbihScreen() {
     dhikrListRef.current = newList;
     saveData(newCounts, newList);
 
-    const idx = newList.findIndex((d) => d.id === id);
-    setActiveTab(idx === -1 ? newList.length - 1 : idx);
+    // ملاحظة: ما نبدّل activeTab هنا بعد - الأذكار المضافة صارت تنعد بوضع التركيز
+    // المنفصل بس (شوف openFocusMode)، مو بالتبويب الرئيسي المشترك مع الأذكار الثابتة
     return newD;
+  };
+
+  // ===== إزالة ذكر مخصص نهائياً (هدف: قابلية الحذف للأذكار المضافة) =====
+  const removeCustomDhikr = async (id: string) => {
+    const newList = dhikrListRef.current.filter((d) => d.id !== id);
+    const { [id]: _removed, ...restCounts } = countsRef.current;
+    setDhikrList(newList);
+    setCounts(restCounts);
+    dhikrListRef.current = newList;
+    countsRef.current = restCounts;
+    saveData(restCounts, newList);
+    // لو كان هذا الذكر مفتوح حالياً بوضع التركيز، نسكره فوراً حتى ما يضل المايك
+    // شغال على ذكر انحذف
+    if (focusDhikrId === id) closeFocusMode();
   };
 
   // إضافة ذكر مخصص يدوياً من كارد "أضف ذكر خاص" بقائمة المزيد - مضمون ١٠٠٪ (مو تعرّف صوتي عشوائي)
   const handleAddComposerDhikr = async () => {
     const text = composerText.trim();
     if (!text) return;
-    await addCustomDhikr(text);
+
+    // فحص التكرار: هل هذا الذكر موجود مسبقاً (أساسي أو مخصص) بنفس النص أو نفس الكلمة المفتاحية؟
+    const normText = normalizeArabic(text);
+    const existing = dhikrListRef.current.find(
+      (d) =>
+        normalizeArabic(d.sub) === normText ||
+        d.keywords.some((kw) => normalizeArabic(kw) === normText)
+    );
+    if (existing) {
+      const idx = dhikrListRef.current.findIndex((d) => d.id === existing.id);
+      if (idx !== -1) setActiveTab(idx);
+      Alert.alert('موجود مسبقاً', `هذا الذكر مضاف عندك مسبقاً باسم "${existing.label}"`);
+      setComposerText('');
+      return;
+    }
+
+    const newD = await addCustomDhikr(text, parseInt(composerTarget, 10) || 33);
     setComposerText('');
+    setComposerTarget('33');
+    // نفتح وضع التركيز فوراً على الذكر الجديد ونسكر قائمة "المزيد" - هيك المايك يصير
+    // جاهز يلقط الذكر المضاف مباشرة بدون ما يحتاج المستخدم يدور عليه ويفتحه يدوياً
     setMoreOpen(false);
+    openFocusMode(newD.id);
   };
 
   // ===== تطبيق العدة فعلياً (تشترك فيها المعالجة اللحظية والمعالجة النهائية) =====
@@ -898,15 +1218,12 @@ export default function TasbihScreen() {
 
     pulseCircle();
     bounceNumber();
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerHaptic(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light));
 
     if (prevCount < dhikr.target && newCount >= dhikr.target) celebrate();
   };
 
-  // يسجل أي عبارة إسلامية غير معروفة سمعناها "مرة وحدة" بس - ما نسوي لها كارد إلا لو تكررت
-  const pendingNewPhrasesRef = useRef<Record<string, number>>({});
-
-  // ===== معالجة الحالات الغامضة فقط (ذكر جديد كلياً / ثقة متوسطة تحتاج Groq) =====
+  // ===== معالجة الحالات الغامضة فقط (ثقة متوسطة تحتاج Groq) =====
   // هذي تنحل فقط عند اكتمال الجملة (isFinal) حتى ما نرسل طلبات API على كل كلمة أولية
   const handleSpeechResult = async (text: string) => {
     if (!text) return;
@@ -915,28 +1232,16 @@ export default function TasbihScreen() {
     if (now - lastCountTime.current < VOICE_DEBOUNCE) return;
     lastCountTime.current = now;
 
-    const { result, repeats } = await matchDhikr(text, dhikrListRef.current);
+    const { result, repeats } = await matchDhikr(text, matchScopeRef.current);
     if (!result || result === 'none') return;
 
-    let dhikr: DhikrType | undefined;
-    let addCount = repeats;
+    // "new:" (ذكر غير معروف) صار يُتجاهل عمداً - الإضافة انصارت يدوية بس (من "أضف ذكر خاص"
+    // بقائمة المزيد) حتى ما تنسوي كاردات تلقائية من كلام مسموع بالغلط أو ضجيج
+    if (result.startsWith('new:')) return;
 
-    if (result.startsWith('new:')) {
-      const newText = result.slice(4).trim();
-      if (!newText) return;
-      // ذكر غير معروف - نتأكد إنه تكرر مرتين قبل لا نسوي له كارد دائم (يمنع ضجيج كلام غير واضح)
-      const key = normalizeArabic(newText);
-      const seenCount = (pendingNewPhrasesRef.current[key] ?? 0) + 1;
-      pendingNewPhrasesRef.current[key] = seenCount;
-      if (seenCount < 2) return;
-      dhikr = await addCustomDhikr(newText);
-      addCount = 1;
-    } else {
-      dhikr = dhikrListRef.current.find((d) => d.id === result);
-    }
-
+    const dhikr = matchScopeRef.current.find((d) => d.id === result);
     if (!dhikr) return;
-    applyDhikrCount(dhikr, addCount);
+    applyDhikrCount(dhikr, repeats);
   };
 
   // ===== معالجة لحظية لكل قطعة كلام (أولية أو نهائية) — العد يصير وياك أثناء الحچي مباشرة =====
@@ -949,8 +1254,62 @@ export default function TasbihScreen() {
   >(new Map());
   const finalizedSegments = useRef<Set<number>>(new Set()); // يمنع معالجة نفس المقطع مرتين
 
+  // ===== ذاكرة استمرارية قصيرة الأمد بين مقطعين متتاليين لنفس الذكر الطويل =====
+  // تحل مشكلة: لو محرك التعرف "قفل" مقطع كلام (isFinal) بمنتصف ذكر طويل (خاصة الأذكار
+  // المخصصة)، والكلمة/الكلمات الجاية بعده توصل كـ"مقطع جديد" منفصل بدون أي رابط بالمقطع
+  // السابق، فتنطابق من الصفر مع كل الأذكار وممكن "تنخطف" لذكر قصير غير مقصود (مثال:
+  // "سبحانك" لحالها تنطابق مع "سبحان الله" بدل ما تُحسب استمرار للذكر الطويل الأصلي).
+  const CONTINUATION_WINDOW_MS = 1800;
+  const lastCommittedRef = useRef<{
+    dhikrId: string;
+    keywordWords: string[];
+    matchedCount: number;
+    ts: number;
+  } | null>(null);
+
+  // ===== عدّة معلّقة بانتظار حسم تعارض "بداية مطابقة" =====
+  // لو مقطع كلام يطابق ذكر قصير تطابقاً تاماً، بس بنفس الوقت هو بداية محتملة لذكر أطول
+  // (شوف findLongerPrefixCollision)، ما نطبق عدة الذكر القصير فوراً - نستنى نافذة قصيرة
+  // (CONTINUATION_WINDOW_MS) نشوف هل المقطع الجاي يكمل الذكر الطويل. إذا اكتمل/تقدّم -
+  // نلغي هذي العدة المعلقة نهائياً (كانت غلط). إذا ما اكمل - نطبقها بعد انتهاء المهلة
+  // (أو فوراً إذا تأكدنا الاستمرارية فشلت). هذا التأخير البسيط ما يصير إلا بحالة التعارض
+  // الفعلي بس (ذكر مخصص يبدأ بنفس كلمات ذكر ثابت) - باقي الأذكار العادية تبقى فورية 100%.
+  const pendingFallbackRef = useRef<{
+    timer: any;
+    dhikr: DhikrType;
+    total: number;
+  } | null>(null);
+  // رقم المقطع (resultIdx) اللي سببّ التأجيل - يمنع إعادة معالجة نفس المقطع مرتين
+  // (المقطع الواحد ممكن يوصل بأكثر من حدث: أولي ثم نهائي لنفس resultIdx)
+  const deferredIdxRef = useRef<number | null>(null);
+
+  const clearPendingFallback = () => {
+    if (pendingFallbackRef.current) {
+      clearTimeout(pendingFallbackRef.current.timer);
+      pendingFallbackRef.current = null;
+    }
+  };
+
+  const commitPendingFallback = () => {
+    const p = pendingFallbackRef.current;
+    if (!p) return;
+    clearTimeout(p.timer);
+    pendingFallbackRef.current = null;
+    applyDhikrCount(p.dhikr, p.total, true);
+  };
+
   const processLiveSegment = (text: string, resultIdx: number, isFinal: boolean) => {
     if (isFinal && finalizedSegments.current.has(resultIdx)) return;
+
+    // هذا المقطع بالذات أجّلنا قراره سابقاً (تعارض بداية مطابقة) - أي حدث جديد إلو (أولي
+    // أو نهائي) نتجاهله هنا؛ القرار النهائي يتحدد بالمقطع الجاي عبر منطق الاستمرارية فوق
+    if (deferredIdxRef.current === resultIdx) {
+      if (isFinal) {
+        finalizedSegments.current.add(resultIdx);
+        deferredIdxRef.current = null;
+      }
+      return;
+    }
 
     const rollbackSegment = () => {
       const prevEntry = segmentMatchRef.current.get(resultIdx);
@@ -961,14 +1320,103 @@ export default function TasbihScreen() {
       segmentMatchRef.current.delete(resultIdx);
     };
 
-    const norm = text ? normalizeArabic(text) : '';
-    if (!text || !looksIslamic(norm)) {
-      rollbackSegment();
+    // نص فاضي = سكوت/انقطاع لحظي بالتعرف الصوتي - مو "لغط" ومو سبب كافي نراجع عدة
+    // مطبقة مسبقاً لهذا المقطع. قبل هذا الفحص كان أي نص فاضي (شي طبيعي عند توقف
+    // المستخدم عن الحچي) يسوي rollback كامل ويرجع العداد صفر رغم إن الذكر انعد صح.
+    if (!text) {
       if (isFinal) finalizedSegments.current.add(resultIdx);
       return;
     }
 
-    const { id, score, keyword } = bestLocalMatch(text, dhikrListRef.current);
+    const norm = normalizeArabic(text);
+    const normWords = norm.split(' ').filter(Boolean);
+
+    // أول شي نتحقق: هل هذا المقطع الجديد استمرار لذكر طويل كان قاعد ينبني بمقطع سابق
+    // وانقطع بمنتصفه؟ إذا نعم، نكمله بدل ما نطابقه من الصفر مع كل الأذكار.
+    if (!segmentMatchRef.current.has(resultIdx)) {
+      const lc = lastCommittedRef.current;
+      if (lc && Date.now() - lc.ts <= CONTINUATION_WINDOW_MS && lc.matchedCount < lc.keywordWords.length) {
+        const nextWord = lc.keywordWords[lc.matchedCount];
+        if (normWords.length && normWords[0] === nextWord) {
+          const combinedWords = lc.keywordWords.slice(0, lc.matchedCount).concat(normWords);
+          const isNowComplete = combinedWords.length >= lc.keywordWords.length;
+          const dhikrObj = dhikrListRef.current.find((d) => d.id === lc.dhikrId);
+          if (dhikrObj) {
+            // الكلام كمّل فعلاً كلمات الذكر الطويل -> العدة المعلقة (إن وجدت) كانت خطأ، تُلغى نهائياً
+            clearPendingFallback();
+            if (isNowComplete) {
+              applyDhikrCount(dhikrObj, 1, true);
+              const idx = dhikrListRef.current.findIndex((d) => d.id === lc.dhikrId);
+              if (idx !== -1) setActiveTab(idx);
+              lastCommittedRef.current = null;
+            } else {
+              lastCommittedRef.current = { ...lc, matchedCount: combinedWords.length, ts: Date.now() };
+            }
+            if (isFinal) finalizedSegments.current.add(resultIdx);
+            return;
+          }
+        } else {
+          // ما كملت نفس الذكر المعلق - نلغي الاستمرارية، ولو فيه عدة معلقة (fallback) كانت
+          // مستنية هذا القرار بالضبط -> نطبقها هسه فوراً (تأكدنا الاستمرارية فشلت، ما داعي ننتظر)
+          lastCommittedRef.current = null;
+          commitPendingFallback();
+        }
+      }
+    }
+
+    if (!looksIslamic(norm, matchScopeRef.current)) {
+      // ⚠️ تعديل (حل مشكلة "العداد يطلع وينزل بنفس الوقت" بوضع التركيز، خصوصاً
+      // مع كلمات مفتاحية قصيرة مثل "كريم"): مقطع كلام وسيط (interim، مو isFinal)
+      // وقصير جداً (كلمة وحدة أو أقل) ما يكفي لنحكم عليه "لغط حقيقي" ونسوي
+      // تراجع فوري. الأشيع إن هذا مجرد تشويش لحظي بمحرك التعرف الصوتي أثناء
+      // تكوّن الجملة (مثلاً يرجع "يا" لحالها لحظياً قبل ما تكتمل "يا كريم") -
+      // كلمات مفتاحية قصيرة زي "كريم" حساسة جداً لهذا التذبذب لأن أي انحراف
+      // بسيط بالتفريغ يخرجها عن التطابق. قبل هذا التعديل، كل مقطع وسيط
+      // يفشل المطابقة كان يسوي rollback فوري على عدة اتطبقت بالمقطع اللي
+      // قبله، وبعدين تنزاد من جديد لما يوصل مقطع صحيح - وهذا يبين كـ"صعود
+      // ونزول بنفس الوقت". الحل: نستنى إما جملة أطول (كلمتين فأكثر) أو
+      // اكتمال المقطع فعلياً (isFinal) قبل ما نراجع عدة سابقة - هذا ما يأثر
+      // إطلاقاً على رفض اللغط الحقيقي (جملة كاملة واضحة غير متعلقة بالذكر).
+      const isNoisyShortInterim = !isFinal && normWords.length <= 1;
+      if (!isNoisyShortInterim) {
+        // هنا فعلاً كلام غير متعلق بذكر (لغط حقيقي) -> التراجع مبرر
+        rollbackSegment();
+      }
+      if (isFinal) finalizedSegments.current.add(resultIdx);
+      return;
+    }
+
+    const { id, score, keyword } = bestLocalMatch(text, matchScopeRef.current);
+
+    // ===== فحص تعارض "بداية مطابقة" =====
+    // هذا المقطع طابق ذكر قصير تطابقاً تاماً - بس هل هو بنفس الوقت بداية محتملة لذكر
+    // أطول بالقائمة (ذكر مخصص يبدأ بنفس كلماته بالضبط)؟ لو نعم، لا نطبق عدة الذكر
+    // القصير فوراً - نؤجلها ونعطي فرصة للمقطع الجاي يثبت هل هو استمرار للذكر الطويل.
+    if (score >= SIM_HIGH && id && !pendingFallbackRef.current) {
+      const kwWordsNow = keyword.split(' ').filter(Boolean);
+      if (normWords.length === kwWordsNow.length) {
+        const collision = findLongerPrefixCollision(kwWordsNow, id, matchScopeRef.current);
+        if (collision) {
+          const shortDhikr = matchScopeRef.current.find((d) => d.id === id);
+          if (shortDhikr) {
+            lastCommittedRef.current = {
+              dhikrId: collision.dhikr.id,
+              keywordWords: collision.keywordWords,
+              matchedCount: normWords.length,
+              ts: Date.now(),
+            };
+            pendingFallbackRef.current = {
+              dhikr: shortDhikr,
+              total: countRepeats(norm, keyword),
+              timer: setTimeout(commitPendingFallback, CONTINUATION_WINDOW_MS),
+            };
+            deferredIdxRef.current = resultIdx;
+            if (isFinal) finalizedSegments.current.add(resultIdx);
+            return;
+          }
+        }
+      }
+    }
 
     // ثقة عالية = ذكر معروف بالتأكيد -> عدّ لحظي محلي فوري
     if (score >= SIM_HIGH && id) {
@@ -1021,6 +1469,14 @@ export default function TasbihScreen() {
       }
 
       if (isFinal) {
+        // نسجل استمرارية للمقطع الجاي بس إذا الذكر المطابق لسا ناقص (كلمتين أو أكثر
+        // بالكلمة المفتاحية، وعدد كلمات الكلام المسموع أقل من عدد كلمات الذكر الكامل)
+        const kwWordsArr = keyword.split(' ').filter(Boolean);
+        if (kwWordsArr.length >= 2 && normWords.length < kwWordsArr.length) {
+          lastCommittedRef.current = { dhikrId: id, keywordWords: kwWordsArr, matchedCount: normWords.length, ts: Date.now() };
+        } else {
+          lastCommittedRef.current = null;
+        }
         finalizedSegments.current.add(resultIdx);
         segmentMatchRef.current.delete(resultIdx);
       }
@@ -1030,6 +1486,7 @@ export default function TasbihScreen() {
     // ثقة متوسطة/منخفضة (ذكر جديد أو غامض) -> نستنى اكتمال الجملة فقط
     if (isFinal) {
       rollbackSegment();
+      lastCommittedRef.current = null;
       finalizedSegments.current.add(resultIdx);
       handleSpeechResult(text);
     }
@@ -1039,25 +1496,68 @@ export default function TasbihScreen() {
   // عداد داخلي للتفريق بين "مقطع كلام" وآخر (كل ما توصل نتيجة نهائية isFinal=true نبدي مقطع جديد)
   const segmentIdRef = useRef(0);
   const restartTimerRef = useRef<any>(null);
+  // عداد محاولات إعادة التشغيل المتتالية - يمنع اللوب اللانهائي الصامت عند خطأ متكرر
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 4;
+  // مؤشر مستوى الصوت الحي (يغذّي نبضة مؤشر المايك) + آخر حالة "هل نسمع صوت مسموع الآن"
+  const micVolumeAnim = useRef(new Animated.Value(0)).current;
+  const hearingStateRef = useRef(false);
 
   useSpeechRecognitionEvent('start', () => {
     setIsListening(true);
     setLastWord('🎙 جاري الاستماع...');
+    retryCountRef.current = 0; // بدء ناجح = نصفّر عداد المحاولات الفاشلة
   });
 
   useSpeechRecognitionEvent('result', (event: any) => {
-    const text = event.results?.[0]?.transcript ?? '';
+    const alternatives: string[] = Array.isArray(event.results)
+      ? event.results.map((r: any) => r?.transcript).filter(Boolean)
+      : [];
+    const text = alternatives.length
+      ? pickBestAlternative(alternatives, matchScopeRef.current)
+      : (event.results?.[0]?.transcript ?? '');
     processLiveSegment(text, segmentIdRef.current, !!event.isFinal);
     if (event.isFinal) segmentIdRef.current += 1;
+  });
+
+  useSpeechRecognitionEvent('volumechange', (event: any) => {
+    const raw = typeof event?.value === 'number' ? event.value : VOLUME_MIN;
+    const norm = Math.max(0, Math.min(1, (raw - VOLUME_MIN) / (VOLUME_MAX - VOLUME_MIN)));
+    Animated.timing(micVolumeAnim, { toValue: norm, duration: 100, useNativeDriver: true }).start();
+
+    // فيدباك نصي حي: نبدّل بين "جاري الاستماع" و"يسمعك" حسب مستوى الصوت الفعلي -
+    // بس لو ما فيه ذكر انطابق هسه (النص الحالي لسا رسالة حالة، مو اسم ذكر فعلي)
+    const audibleNow = raw > VOLUME_AUDIBLE_THRESHOLD;
+    if (audibleNow !== hearingStateRef.current) {
+      hearingStateRef.current = audibleNow;
+      if (audibleNow) {
+        setLastWord((prev) => (prev.startsWith('🎙') ? '🎙 يسمعك...' : prev));
+      } else {
+        setLastWord((prev) => (prev === '🎙 يسمعك...' ? '🎙 جاري الاستماع...' : prev));
+      }
+    }
   });
 
   useSpeechRecognitionEvent('error', (event: any) => {
     // "no-speech" و"aborted" مو أخطاء حقيقية تستاهل تنبيه - أول وحدة سكوت لحظي، والثانية توقف طبيعي
     if (event.error === 'no-speech' || event.error === 'aborted') return;
-    // أي خطأ ثاني وإحنا لسا بوضع استماع -> نحاول نعيد التشغيل بعد فاصل بسيط
+    // أي خطأ ثاني وإحنا لسا بوضع استماع -> نحاول نعيد التشغيل، بس بحد أقصى محاولات
+    // (سابقاً كان يعيد المحاولة للأبد بصمت حتى لو المشكلة مستمرة - الحين نوقف ونبلغ المستخدم)
     if (isListeningRef.current) {
+      retryCountRef.current += 1;
+      if (retryCountRef.current > MAX_RETRIES) {
+        isListeningRef.current = false;
+        setIsListening(false);
+        setLastWord('');
+        Alert.alert(
+          'تعذر الاستماع بشكل متكرر',
+          'صار فيه مشكلة مستمرة بالتعرف على الصوت. تأكد من إذن المايك ومن اتصال الإنترنت وحاول تفتح الاستماع مرة ثانية.'
+        );
+        return;
+      }
       segmentMatchRef.current.clear();
       finalizedSegments.current.clear();
+      lastCommittedRef.current = null;
       restartTimerRef.current = setTimeout(() => {
         try { ExpoSpeechRecognitionModule.start(SPEECH_OPTIONS); } catch {}
       }, 300);
@@ -1067,10 +1567,20 @@ export default function TasbihScreen() {
   });
 
   useSpeechRecognitionEvent('end', () => {
-    // "end" ينوصل حتى لو المستخدم هو اللي أوقف - نعيد التشغيل بس لو إحنا لسا "قاعدين نستمع" فعلاً
+    // "end" ينوصل حتى لو المستخدم هو اللي أوقف. مهم: نمسح خرائط التتبع هنا بس - بعد ما
+    // نتأكد ما فيه نتائج متأخرة راح توصل - وليس فوراً جوه stopListening()، لأن محرك
+    // التعرف الصوتي أحياناً يرسل نتيجة نهائية متأخرة *بعد* نداء stop() مباشرة. لو مسحنا
+    // الخرائط قبل وصولها، هذي النتيجة المتأخرة تنعامل كذكر جديد كامل وتزيد العدة فوق
+    // الشي المعدود مسبقاً أثناء التسبيح الفعلي (سبب علة "زيادة العدات وقت التوقف").
+    segmentMatchRef.current.clear();
+    finalizedSegments.current.clear();
+    lastCommittedRef.current = null;
+    // نفس المبدأ ينطبق على العدة المعلقة (تعارض بداية مطابقة) - لو ضلت مؤجلة وصار
+    // "end" (حتى بإعادة التشغيل التلقائي، مو بس الإيقاف اليدوي)، لازم تنمسح هنا،
+    // وإلا ممكن تنطبق متأخرة بجلسة استماع جديدة كلياً على مقطع صار قديم
+    clearPendingFallback();
+    deferredIdxRef.current = null;
     if (isListeningRef.current) {
-      segmentMatchRef.current.clear();
-      finalizedSegments.current.clear();
       try { ExpoSpeechRecognitionModule.start(SPEECH_OPTIONS); } catch {}
     } else {
       setIsListening(false);
@@ -1093,19 +1603,36 @@ export default function TasbihScreen() {
     }
     segmentMatchRef.current.clear();
     finalizedSegments.current.clear();
+    lastCommittedRef.current = null;
     segmentIdRef.current = 0;
     isListeningRef.current = true;
     setIsListening(true);
     setLastWord('🎙 جاري الاستماع...');
     ExpoSpeechRecognitionModule.start(SPEECH_OPTIONS);
+
+    // تحذير لطيف بالخلفية إذا مافي إنترنت - ما يأخر ولا يوقف بدء الاستماع نفسه،
+    // لأن الأذكار الأساسية تنعد صوتياً محلياً بدون نت أصلاً
+    checkNetworkReachable().then((online) => {
+      if (!online && isListeningRef.current) {
+        Alert.alert(
+          'لا يوجد اتصال بالإنترنت',
+          'الأذكار الأساسية (تسبيح، تحميد، تكبير...) بتنعد صوتياً عادي بدون نت، بس تمييز الكلام الغامض أو الأذكار غير الشائعة يحتاج اتصال وممكن ما يشتغل هسه.'
+        );
+      }
+    });
   };
 
   const stopListening = () => {
     isListeningRef.current = false;
     if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+    clearPendingFallback();
+    deferredIdxRef.current = null;
+    lastCommittedRef.current = null;
     ExpoSpeechRecognitionModule.stop();
-    segmentMatchRef.current.clear();
-    finalizedSegments.current.clear();
+    // ملاحظة: خرائط التتبع (segmentMatchRef/finalizedSegments) ما تنمسح هنا عمداً -
+    // تنمسح بحدث 'end' الحقيقي بعد ما نضمن وصول كل النتائج المتأخرة أول (شوف تعليق 'end' فوق)
+    hearingStateRef.current = false;
+    micVolumeAnim.setValue(0);
     setIsListening(false);
     setLastWord('');
   };
@@ -1170,26 +1697,15 @@ export default function TasbihScreen() {
       Animated.timing(circleScale, { toValue: 1.08, duration: 140, useNativeDriver: true }),
       Animated.spring(circleScale, { toValue: 1,     friction: 3,   useNativeDriver: true }),
     ]).start();
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    triggerHaptic(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success));
     setTimeout(() => setCelebrating(false), 1800);
   };
 
-  // ===== العدّ اليدوي (تاب على الدائرة) =====
+  // ===== العدّ اليدوي (تاب على الدائرة) - يستخدم نفس منطق applyDhikrCount حتى ما نكرر الكود
+  // ونضمن أي إصلاح مستقبلي (متل مزامنة countsRef) ينطبق على الاثنين سوا =====
   const manualCount = () => {
-    const current    = dhikrList[activeTab];
-    const prevCount  = countsRef.current[current.id] ?? 0;
-    const newCount   = prevCount + 1;
-    const newCounts  = { ...countsRef.current, [current.id]: newCount };
-    setCounts(newCounts);
-    countsRef.current = newCounts;
-    saveData(newCounts, dhikrList);
-    bumpDailyTotal(1, current.id);
-    playTick();
-    pulseCircle();
-    bounceNumber();
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-    if (prevCount < current.target && newCount >= current.target) celebrate();
+    const current = dhikrList[activeTab];
+    applyDhikrCount(current, 1);
   };
 
   // ===== تراجع بوحدة واحدة (تُستدعى من اللمسة الطويلة على الدائرة) =====
@@ -1198,7 +1714,7 @@ export default function TasbihScreen() {
     if (!cur) return;
     const prevCount = countsRef.current[cur.id] ?? 0;
     if (prevCount <= 0) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      triggerHaptic(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error));
       return;
     }
     const newCount  = prevCount - 1;
@@ -1208,26 +1724,41 @@ export default function TasbihScreen() {
     saveData(newCounts, dhikrListRef.current);
     bumpDailyTotal(-1, cur.id);
     setLastWord('تراجع وحدة ↩');
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    triggerHaptic(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning));
   };
 
   // ===== إعادة تعيين =====
   const resetCurrent = async () => {
     const current   = dhikrList[activeTab];
-    const newCounts = { ...counts, [current.id]: 0 };
+    const prevCount = countsRef.current[current.id] ?? 0;
+    const newCounts = { ...countsRef.current, [current.id]: 0 };
     setCounts(newCounts);
+    countsRef.current = newCounts;
     await saveData(newCounts, dhikrList);
+    // نطرح العدة القديمة من "تسبيح اليوم" وتفصيله حتى ما يبقون عادّين عدة انصفرت
+    // من كارد الذكر نفسه - نفس منطق التراجع (undoOneCount) بالضبط
+    if (prevCount > 0) await bumpDailyTotal(-prevCount, current.id);
   };
 
   const resetAll = async () => {
+    const prevCounts = countsRef.current;
     const newCounts: Record<string, number> = {};
     dhikrList.forEach((d) => { newCounts[d.id] = 0; });
     setCounts(newCounts);
+    countsRef.current = newCounts;
     await saveData(newCounts, dhikrList);
+    // نفس الشي لكل ذكر لحاله - كل ذكر عنده عدة سابقة، نطرحها من مجموع اليوم وتفصيله
+    for (const d of dhikrList) {
+      const prevCount = prevCounts[d.id] ?? 0;
+      if (prevCount > 0) await bumpDailyTotal(-prevCount, d.id);
+    }
   };
 
   // ===== القيم الحالية =====
   const current      = dhikrList[activeTab] ?? dhikrList[0];
+  const focusDhikr    = focusDhikrId ? dhikrList.find((d) => d.id === focusDhikrId) ?? null : null;
+  const focusCount    = focusDhikrId ? (counts[focusDhikrId] ?? 0) : 0;
+  const focusProgress = focusDhikr ? Math.min(focusCount / focusDhikr.target, 1) : 0;
   const currentCount = counts[current.id] ?? 0;
   const progress     = Math.min(currentCount / current.target, 1);
   const glowColor     = getGlow(current.id);
@@ -1241,6 +1772,38 @@ export default function TasbihScreen() {
       useNativeDriver: false, // strokeDashoffset ما يدعم native driver
     }).start();
   }, [progress]);
+
+  // نفس الشي لحلقة وضع التركيز - مستقلة كلياً عن الحلقة الرئيسية
+  useEffect(() => {
+    Animated.timing(focusRingProgress, {
+      toValue: focusProgress,
+      duration: 350,
+      useNativeDriver: false,
+    }).start();
+  }, [focusProgress]);
+
+  // ===== عدّ يدوي (تاب) داخل وضع التركيز - يستخدم نفس applyDhikrCount بالضبط
+  // (نفس الاهتزاز/الصوت/الاحتفال عند الوصول للهدف)، بس switchTab=false حتى ما يأثر
+  // على التبويب الرئيسي المخفي خلف الوضع الضبابي =====
+  const focusManualCount = () => {
+    if (!focusDhikr) return;
+    applyDhikrCount(focusDhikr, 1, false);
+  };
+
+  const focusUndoCount = () => {
+    if (!focusDhikr) return;
+    const prevCount = countsRef.current[focusDhikr.id] ?? 0;
+    if (prevCount <= 0) {
+      triggerHaptic(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error));
+      return;
+    }
+    const newCounts = { ...countsRef.current, [focusDhikr.id]: prevCount - 1 };
+    setCounts(newCounts);
+    countsRef.current = newCounts;
+    saveData(newCounts, dhikrListRef.current);
+    bumpDailyTotal(-1, focusDhikr.id);
+    triggerHaptic(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning));
+  };
 
   // ===== نظام لمس موحّد على الدائرة (تاب = عدّة، لمسة طويلة = تراجع، سحب = تبديل ذكر) =====
   // ملاحظة: تعمّدنا عدم الجمع بين Pressable و PanResponder على نفس العنصر لأنهم يتعارضون
@@ -1280,12 +1843,16 @@ export default function TasbihScreen() {
     const elapsed = Date.now() - touchStartRef.current.time;
 
     if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      // سحب أفقي = تبديل الذكر النشط
-      const list = dhikrListRef.current;
+      // سحب أفقي = تبديل الذكر النشط (بس بين الأذكار الثابتة - المضافة بوضع التركيز المنفصل)
+      const list = dhikrListRef.current.filter((d) => !d.isCustom);
       if (list.length > 1) {
         const dir = dx < 0 ? 1 : -1; // سحب لليسار = التالي، لليمين = السابق
-        setActiveTab((prevIdx) => (prevIdx + dir + list.length) % list.length);
-        Haptics.selectionAsync();
+        const curIdx = list.findIndex((d) => d.id === dhikrListRef.current[activeTab]?.id);
+        const base = curIdx === -1 ? 0 : curIdx;
+        const nextIdx = (base + dir + list.length) % list.length;
+        const nextGlobalIdx = dhikrListRef.current.findIndex((d) => d.id === list[nextIdx].id);
+        if (nextGlobalIdx !== -1) setActiveTab(nextGlobalIdx);
+        triggerHaptic(() => Haptics.selectionAsync());
       }
     } else if (Math.abs(dx) < 12 && Math.abs(dy) < 12 && elapsed < 500) {
       // ضغطة عادية = عدّة
@@ -1295,9 +1862,10 @@ export default function TasbihScreen() {
 
   // ===== واجهة الشاشة =====
   const screenContent = (
-    <SafeAreaView
+    <View
       style={[
         styles.container,
+        { paddingTop: insets.top },
         !bgOption.image && { backgroundColor: bgOption.color },
       ]}
     >
@@ -1308,14 +1876,19 @@ export default function TasbihScreen() {
 
           {/* ===== الهيدر (الشعار + التاريخ + الصوت والمنيو، كلهم بنفس المستوى) ===== */}
           <View style={styles.header}>
-            {/* شعار التطبيق الحقيقي - الملف بمسار src/assets/logo.png */}
-            <View style={styles.logoBadge}>
+            {/* شعار التطبيق الحقيقي - الملف بمسار src/assets/logo.png - صار قابل
+                للضغط: يفتح فيديو تعريفي قصير ثم واجهة "حول التطبيق" */}
+            <TouchableOpacity
+              style={styles.logoBadge}
+              activeOpacity={0.75}
+              onPress={() => { setLogoIntroMounted(true); setShowLogoIntro(true); }}
+            >
               <Image
                 source={require('../assets/logo.png')}
                 style={styles.logoImage}
                 resizeMode="contain"
               />
-            </View>
+            </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => router.push('/settings/calendar' as any)}
@@ -1326,8 +1899,17 @@ export default function TasbihScreen() {
                 <Text style={styles.dateHijri}>{dateParts.hijri}</Text>
               )}
               {calendarPref !== 'hijri' && (
-                <Text style={calendarPref === 'gregorian' ? styles.dateHijri : styles.dateGregorian}>
-                  {dateParts.gregorian}
+                <Text style={styles.dateGregorian}>{dateParts.gregorian}</Text>
+              )}
+              {dateParts.occasion && (
+                <Text
+                  style={[
+                    styles.occasionBadge,
+                    { color: dateParts.occasion.type === 'sorrow' ? '#c8a8a8' : '#c8e0a8' },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {dateParts.occasion.type === 'sorrow' ? '🕯️ ' : '✨ '}{dateParts.occasion.name}
                 </Text>
               )}
             </TouchableOpacity>
@@ -1343,6 +1925,10 @@ export default function TasbihScreen() {
               <GlassHamburgerMenu />
             </View>
           </View>
+
+          {logoIntroMounted && (
+            <LogoIntroModal visible={showLogoIntro} onClose={() => setShowLogoIntro(false)} />
+          )}
 
           <View style={styles.mainLayout}>
             <View style={styles.leftPanel}>
@@ -1360,7 +1946,7 @@ export default function TasbihScreen() {
                   <Animated.View
                     style={[
                       styles.outerRing,
-                      { borderColor: glowColor, shadowColor: glowColor },
+                      { borderColor: glowColor },
                       { transform: [{ scale: circleScale }] },
                     ]}
                   >
@@ -1372,7 +1958,14 @@ export default function TasbihScreen() {
                       celebrating={celebrating}
                     />
                     <View style={styles.glassCircle}>
-                      <Text style={styles.dhikrText}>{current.sub}</Text>
+                      <Text
+                        style={styles.dhikrText}
+                        numberOfLines={3}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.55}
+                      >
+                        {current.sub}
+                      </Text>
                       <Animated.Text
                         style={[
                           styles.countText,
@@ -1418,7 +2011,6 @@ export default function TasbihScreen() {
                       styles.liquidPill,
                       {
                         borderColor: getGlow(current.id),
-                        shadowColor: getGlow(current.id),
                         transform: [{ translateX: pillX }],
                         width: pillWidth,
                       },
@@ -1473,7 +2065,7 @@ export default function TasbihScreen() {
               >
                 <Pressable style={styles.modalOverlay} onPress={() => setMoreOpen(false)}>
                   <View style={styles.moreDropdown} onStartShouldSetResponder={() => true}>
-                    <BlurView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+                    <BlurView intensity={95} tint="dark" style={StyleSheet.absoluteFill} />
                     {/* هيدر */}
                     <View style={styles.moreDropdownHeader}>
                       <Text style={styles.moreDropdownTitle}>باقي التسبيحات</Text>
@@ -1498,6 +2090,17 @@ export default function TasbihScreen() {
                           multiline
                           textAlign="right"
                         />
+                        <View style={styles.composerTargetRow}>
+                          <Text style={styles.composerTargetLabel}>الهدف (عدد المرات)</Text>
+                          <TextInput
+                            style={styles.composerTargetInput}
+                            value={composerTarget}
+                            onChangeText={(t) => setComposerTarget(t.replace(/[^0-9]/g, ''))}
+                            keyboardType="number-pad"
+                            textAlign="center"
+                            maxLength={5}
+                          />
+                        </View>
                         <TouchableOpacity
                           onPress={handleAddComposerDhikr}
                           activeOpacity={composerText.trim() ? 0.7 : 1}
@@ -1551,27 +2154,36 @@ export default function TasbihScreen() {
                             <Text style={styles.moreSectionText}>أذكار مكتشفة بالصوت</Text>
                           </View>
                           {dhikrList.filter(d => d.isCustom).map((d) => {
-                            const i = dhikrList.findIndex(x => x.id === d.id);
                             const tabGlow = '#9A9FAE';
-                            const active = activeTab === i;
                             const usedCount = counts[d.id] ?? 0;
                             return (
-                              <TouchableOpacity
-                                key={d.id}
-                                style={[styles.moreItem, active && styles.moreItemActive]}
-                                onPress={() => { setActiveTab(i); setMoreOpen(false); }}
-                              >
-                                <View style={[styles.moreItemDot, { backgroundColor: tabGlow }]} />
-                                <View style={{ flex: 1 }}>
-                                  <Text style={[styles.moreItemLabel, { color: active ? tabGlow : C.white }]}>
-                                    {d.label}
+                              <View key={d.id} style={styles.moreItem}>
+                                <TouchableOpacity
+                                  onPress={() => {
+                                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+                                    removeCustomDhikr(d.id);
+                                  }}
+                                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                  style={styles.moreItemRemoveBtn}
+                                >
+                                  <Ionicons name="close" size={18} color="rgba(255,120,120,0.9)" />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={{ flex: 1, flexDirection: 'row-reverse', alignItems: 'center', gap: 10 }}
+                                  onPress={() => { openFocusMode(d.id); setMoreOpen(false); }}
+                                >
+                                  <View style={[styles.moreItemDot, { backgroundColor: tabGlow }]} />
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={[styles.moreItemLabel, { color: C.white }]}>
+                                      {d.label}
+                                    </Text>
+                                    <Text style={styles.moreItemSub}>{d.sub}</Text>
+                                  </View>
+                                  <Text style={[styles.moreItemCount, { color: tabGlow }]}>
+                                    {toArabicDigits(usedCount)}
                                   </Text>
-                                  <Text style={styles.moreItemSub}>{d.sub}</Text>
-                                </View>
-                                <Text style={[styles.moreItemCount, { color: tabGlow }]}>
-                                  {toArabicDigits(usedCount)}
-                                </Text>
-                              </TouchableOpacity>
+                                </TouchableOpacity>
+                              </View>
                             );
                           })}
                         </>
@@ -1579,6 +2191,96 @@ export default function TasbihScreen() {
                     </ScrollView>
                   </View>
                 </Pressable>
+              </Modal>
+
+              {/* ===== وضع التركيز - عداد منفصل كلياً للأذكار المضافة ===== */}
+              {/* المايك هنا يسمع بس هذا الذكر بالذات (matchScopeRef يتحول لعنصر واحد فقط) -
+                  ما فيه أي تنافس أو التباس مع الأذكار الثابتة. وقت الخروج يرجع كل شي
+                  للمايك الأساسي تلقائياً (شوف closeFocusMode). الدائرة تدعم تاب = عدّة
+                  يدوية ولمسة طويلة = تراجع، بالضبط متل الدائرة الرئيسية */}
+              <Modal
+                visible={!!focusDhikrId}
+                transparent
+                animationType="fade"
+                statusBarTranslucent
+                onRequestClose={closeFocusMode}
+              >
+                <View style={styles.focusOverlay}>
+                  <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
+                  <View style={styles.focusCard}>
+                    <View style={styles.moreDropdownHeader}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons name="sparkles" size={14} color={C.neonBlue} />
+                        <Text style={styles.moreDropdownTitle}>وضع التركيز</Text>
+                      </View>
+                      <TouchableOpacity onPress={closeFocusMode} style={styles.moreCloseBtn}>
+                        <Ionicons name="close" size={18} color="rgba(255,255,255,0.6)" />
+                      </TouchableOpacity>
+                    </View>
+
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={focusManualCount}
+                      onLongPress={focusUndoCount}
+                      delayLongPress={500}
+                      style={styles.focusCircleWrap}
+                    >
+                      <ProgressRing
+                        size={FOCUS_CIRCLE_SIZE}
+                        strokeWidth={9}
+                        progress={focusRingProgress}
+                        color={C.neonBlue}
+                        celebrating={celebrating}
+                      />
+                      <Animated.View style={[styles.focusGlassCircle, { transform: [{ scale: circleScale }] }]}>
+                        <Text
+                          style={styles.focusDhikrText}
+                          numberOfLines={4}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.5}
+                        >
+                          {focusDhikr?.sub ?? ''}
+                        </Text>
+                        <Animated.Text style={[styles.focusCount, { transform: [{ scale: countScale }] }]}>
+                          {toArabicDigits(focusCount)}
+                        </Animated.Text>
+                        <Text style={styles.focusTarget}>
+                          الهدف {toArabicDigits(focusDhikr?.target ?? 0)}
+                        </Text>
+                      </Animated.View>
+                    </TouchableOpacity>
+                    <Text style={styles.focusHint}>تاب = عدّة يدوية  ·  ضغطة مطوّلة = تراجع وحدة</Text>
+
+                    <TouchableOpacity
+                      style={[styles.voiceBtn, isListening && styles.voiceBtnActive, { marginTop: 16 }]}
+                      onPress={toggleListening}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={18} color={C.white} />
+                      <Text style={styles.voiceBtnText}>
+                        {isListening ? 'إيقاف الاستماع' : 'ابدأ العدّ الصوتي'}
+                      </Text>
+                      {isListening && (
+                        <Animated.View
+                          style={[
+                            styles.liveIndicator,
+                            {
+                              transform: [{
+                                scale: micVolumeAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] }),
+                              }],
+                              opacity: micVolumeAnim.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
+                            },
+                          ]}
+                        />
+                      )}
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={styles.focusExitBtn} onPress={closeFocusMode} activeOpacity={0.75}>
+                      <Ionicons name="arrow-forward-circle-outline" size={16} color="rgba(255,255,255,0.75)" />
+                      <Text style={styles.focusExitText}>الرجوع للتسبيح الأساسي</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </Modal>
 
               {/* تفصيل تسبيح اليوم - أي ذكر انقال وكم مرة اليوم */}
@@ -1685,7 +2387,25 @@ export default function TasbihScreen() {
                   {isListening ? 'إيقاف الاستماع' : 'ابدأ التسبيح الصوتي'}
                 </Text>
                 {isListening && (
-                  <View style={styles.liveIndicator} />
+                  <Animated.View
+                    style={[
+                      styles.liveIndicator,
+                      {
+                        transform: [
+                          {
+                            scale: micVolumeAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [1, 1.9],
+                            }),
+                          },
+                        ],
+                        opacity: micVolumeAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.55, 1],
+                        }),
+                      },
+                    ]}
+                  />
                 )}
               </TouchableOpacity>
 
@@ -1710,6 +2430,7 @@ export default function TasbihScreen() {
             {/* ===== بطاقة التذكير ===== */}
             <View style={styles.rightPanel}>
               <View style={styles.quoteCard}>
+                <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />
                 <View style={styles.quoteHeader}>
                   <View style={styles.quoteLabelRow}>
                     <Ionicons name="book-outline" size={16} color={C.neonBlue} />
@@ -1717,9 +2438,17 @@ export default function TasbihScreen() {
                   </View>
                 </View>
                 <View style={styles.quoteDivider} />
-                <Text style={styles.quoteText}>{verse.text}</Text>
+                <View style={styles.verseBadgeRow}>
+                  <Ionicons name="moon" size={12} color="#D9C45B" />
+                  <Text style={styles.verseBadgeText}>آية قرآنية</Text>
+                </View>
+                <Text style={styles.verseText}>{`﴿ ${verse.text} ﴾`}</Text>
                 <Text style={styles.quoteSource}>{verse.source}</Text>
                 <View style={styles.quoteInnerDivider} />
+                <View style={styles.verseBadgeRow}>
+                  <Ionicons name="person-outline" size={12} color="rgba(255,255,255,0.5)" />
+                  <Text style={[styles.verseBadgeText, { color: 'rgba(255,255,255,0.5)' }]}>كلمة اليوم</Text>
+                </View>
                 <Text style={styles.quoteText}>{quote.text}</Text>
                 <Text style={styles.quoteSource}>{quote.author}</Text>
               </View>
@@ -1729,7 +2458,7 @@ export default function TasbihScreen() {
       </ScrollView>
 
       
-    </SafeAreaView>
+    </View>
   );
 
   // ===== إطار شكل الهاتف (موحّد بكل الشاشات عبر PhoneFrameWrapper المشترك) =====
@@ -1762,7 +2491,8 @@ function createStyles(
   isDesktop: boolean,
   circleSize: number,
   circleFont: number,
-  windowHeight: number
+  windowHeight: number,
+  FOCUS_CIRCLE_SIZE: number
 ) {
   const arcHeight = circleSize * 0.62;
   const arcWidth  = 34;
@@ -1788,7 +2518,7 @@ function createStyles(
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      marginTop: 22,
+      marginTop: 10, // كانت 22 ثابتة تحاول تعوّض غياب المنطقة الآمنة - هسه insets.top يتكفل بالمسافة الحقيقية
       marginBottom: 6,
     },
     logoBadge: {
@@ -1801,11 +2531,6 @@ function createStyles(
       alignItems: 'center',
       justifyContent: 'center',
       overflow: 'hidden',
-      shadowColor: C.neonBlue,
-      shadowOpacity: 1,
-      shadowRadius: 14,
-      shadowOffset: { width: 0, height: 0 },
-      elevation: 6,
     },
     logoImage: {
       width: 38,
@@ -1834,7 +2559,7 @@ function createStyles(
     },
     dateHijri: {
       color: C.white,
-      fontSize: 14 * scale,
+      fontSize: 17 * scale,
       fontWeight: '800',
       textAlign: 'center',
       textShadowColor: 'rgba(0,0,0,0.5)',
@@ -1843,10 +2568,17 @@ function createStyles(
     },
     dateGregorian: {
       color: 'rgba(255,255,255,0.55)',
-      fontSize: 10 * scale,
+      fontSize: 12 * scale,
       fontWeight: '600',
       textAlign: 'center',
       marginTop: 2,
+    },
+    occasionBadge: {
+      fontSize: 10.5 * scale,
+      fontWeight: '700',
+      textAlign: 'center',
+      marginTop: 3,
+      maxWidth: 130,
     },
 
     mainLayout: {
@@ -1884,10 +2616,6 @@ function createStyles(
       borderWidth: 2.5,
       alignItems: 'center',
       justifyContent: 'center',
-      shadowOpacity: 0.65,
-      shadowRadius: 26,
-      shadowOffset: { width: 0, height: 0 },
-      elevation: 14,
       overflow: 'hidden',
       zIndex: 1,
     },
@@ -1928,13 +2656,18 @@ function createStyles(
       fontWeight: '700',
     },
 
-    glassCircle: { alignItems: 'center' },
+    // مساحة آمنة أفقياً داخل الدائرة (وتر أقصر من القطر) حتى النص ما يفارق حدود الدائرة
+    // المدورة وقت الأذكار المخصصة الطويلة - نفس المنطق ينطبق على الأذكار الثابتة القصيرة
+    glassCircle: { alignItems: 'center', paddingHorizontal: 8 },
 
     dhikrText: {
       color: C.cream,
       fontSize: (isTablet ? 20 : 17) * scale,
       fontWeight: '600',
       marginBottom: 6,
+      textAlign: 'center',
+      width: circleSize * 0.68,
+      lineHeight: (isTablet ? 24 : 21) * scale,
       textShadowColor: 'rgba(0,0,0,0.6)',
       textShadowOffset: { width: 0, height: 1 },
       textShadowRadius: 4,
@@ -1985,16 +2718,6 @@ function createStyles(
       borderRadius: 16,
       backgroundColor: C.blueDim,
       borderWidth: 1.5,
-      shadowOpacity: 0.6,
-      shadowRadius: 10,
-      shadowOffset: { width: 0, height: 0 },
-      elevation: 8,
-    },
-    tabActiveShadow: {
-      shadowOpacity: 0.5,
-      shadowRadius: 8,
-      shadowOffset: { width: 0, height: 0 },
-      elevation: 6,
     },
     tabLabel:       { color: 'rgba(255,255,255,0.75)', fontSize: 15 * scale, fontWeight: '700' },
     tabLabelActive: { color: C.white },
@@ -2014,7 +2737,7 @@ function createStyles(
 
     modalOverlay: {
       flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.55)',
+      backgroundColor: 'rgba(0,0,0,0.65)',
       justifyContent: 'center',
       alignItems: 'center',
       paddingHorizontal: 16,
@@ -2022,17 +2745,12 @@ function createStyles(
     moreDropdown: {
       width: '92%',
       maxWidth: 380,
-      backgroundColor: 'rgba(15,30,48,0.45)',
+      backgroundColor: 'rgba(15,30,48,0.6)',
       borderWidth: 1,
       borderColor: 'rgba(255,255,255,0.18)',
       borderRadius: 24,
       paddingBottom: 12,
       overflow: 'hidden',
-      shadowColor: '#000',
-      shadowOpacity: 0.28,
-      shadowRadius: 16,
-      shadowOffset: { width: 0, height: 6 },
-      elevation: 10,
     },
     moreDropdownHeader: {
       flexDirection: 'row-reverse',
@@ -2048,6 +2766,81 @@ function createStyles(
       width: 28, height: 28, borderRadius: 8,
       backgroundColor: 'rgba(255,255,255,0.08)',
       justifyContent: 'center', alignItems: 'center',
+    },
+
+    // ===== وضع التركيز (عداد منفصل للأذكار المضافة) =====
+    focusOverlay: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+    },
+    focusCard: {
+      width: '92%',
+      maxWidth: 380,
+      backgroundColor: 'rgba(15,30,48,0.55)',
+      borderWidth: 1,
+      borderColor: C.glassBorder,
+      borderRadius: 26,
+      paddingBottom: 22,
+      paddingTop: 4,
+      overflow: 'hidden',
+      alignItems: 'center',
+    },
+    focusCircleWrap: {
+      width: FOCUS_CIRCLE_SIZE,
+      height: FOCUS_CIRCLE_SIZE,
+      marginTop: 22,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    focusGlassCircle: {
+      width: FOCUS_CIRCLE_SIZE - 22,
+      height: FOCUS_CIRCLE_SIZE - 22,
+      borderRadius: (FOCUS_CIRCLE_SIZE - 22) / 2,
+      backgroundColor: C.glass,
+      borderWidth: 1,
+      borderColor: C.glassBorder,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+    },
+    focusDhikrText: {
+      color: C.cream,
+      fontSize: 15 * scale,
+      fontWeight: '700',
+      textAlign: 'center',
+      lineHeight: 20 * scale,
+      width: '100%',
+    },
+    focusCount: {
+      color: C.neonBlue,
+      fontSize: 40 * scale,
+      fontWeight: '800',
+      marginTop: 4,
+    },
+    focusTarget: {
+      color: 'rgba(255,255,255,0.5)',
+      fontSize: 11 * scale,
+      marginTop: 1,
+    },
+    focusHint: {
+      color: 'rgba(255,255,255,0.4)',
+      fontSize: 11 * scale,
+      marginTop: 10,
+    },
+    focusExitBtn: {
+      flexDirection: 'row-reverse',
+      alignItems: 'center',
+      gap: 6,
+      marginTop: 14,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+    },
+    focusExitText: {
+      color: 'rgba(255,255,255,0.75)',
+      fontSize: 13 * scale,
+      fontWeight: '600',
     },
 
     composerCard: {
@@ -2083,6 +2876,29 @@ function createStyles(
       textAlignVertical: 'top',
       marginBottom: 10,
     },
+    composerTargetRow: {
+      flexDirection: 'row-reverse',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 10,
+      paddingHorizontal: 2,
+    },
+    composerTargetLabel: {
+      color: 'rgba(255,255,255,0.55)',
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    composerTargetInput: {
+      backgroundColor: 'rgba(0,0,0,0.22)',
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.12)',
+      color: C.neonBlue,
+      fontSize: 15,
+      fontWeight: '800',
+      width: 64,
+      paddingVertical: 6,
+    },
     composerBtn: {
       flexDirection: 'row-reverse',
       alignItems: 'center',
@@ -2107,11 +2923,6 @@ function createStyles(
       borderRadius: 24,
       paddingBottom: 12,
       overflow: 'hidden',
-      shadowColor: C.neonBlue,
-      shadowOpacity: 0.5,
-      shadowRadius: 22,
-      shadowOffset: { width: 0, height: 0 },
-      elevation: 14,
     },
     onboardMainTitle: {
       color: C.white,
@@ -2180,6 +2991,15 @@ function createStyles(
       width: 8, height: 8, borderRadius: 4,
       flexShrink: 0,
     },
+    moreItemRemoveBtn: {
+      width: 30, height: 30, borderRadius: 15,
+      backgroundColor: 'rgba(255,120,120,0.12)',
+      borderWidth: 1,
+      borderColor: 'rgba(255,120,120,0.3)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    },
     moreItemLabel: { fontSize: 14 * scale, fontWeight: '700' },
     moreItemSub:   { color: 'rgba(255,255,255,0.4)', fontSize: 11 * scale, marginTop: 2 },
     moreItemCount: { fontSize: 13 * scale, fontWeight: '800' },
@@ -2199,11 +3019,6 @@ function createStyles(
     },
     voiceBtnActive: {
       backgroundColor: 'rgba(63,169,217,0.25)',
-      shadowColor: C.neonBlue,
-      shadowOpacity: 0.7,
-      shadowRadius: 12,
-      shadowOffset: { width: 0, height: 0 },
-      elevation: 8,
     },
     voiceBtnText: { color: C.white, fontSize: 14 * scale, fontWeight: '600' },
     liveIndicator: {
@@ -2245,25 +3060,22 @@ function createStyles(
 
     // ===== بطاقة التذكير الزجاجية =====
     quoteCard: {
-      backgroundColor: C.glass,
+      backgroundColor: 'rgba(28,43,57,0.35)', // شفافة جزئياً حتى الـ BlurView يبين فعلياً (زجاجية حقيقية)
       borderWidth: 1,
       borderColor: C.glassBorder,
       borderRadius: 20,
       padding: 18,
-      borderLeftWidth: 3,
-      borderLeftColor: C.neonBlue,
-      shadowColor: C.neonBlue,
-      shadowOpacity: 0.15,
-      shadowRadius: 12,
-      shadowOffset: { width: 0, height: 0 },
+      borderRightWidth: 3, // انتقل لليمين ليطابق اتجاه القراءة العربي (كان يسار)
+      borderRightColor: C.neonBlue,
+      overflow: 'hidden', // لازم حتى الزوايا المدورة تقص الـ BlurView صح
     },
     quoteHeader: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
+      flexDirection: 'row-reverse',
+      justifyContent: 'flex-end',
       alignItems: 'center',
     },
-    quoteLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    quoteLabel: { color: C.white, fontSize: 14 * scale, fontWeight: '700' },
+    quoteLabelRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
+    quoteLabel: { color: C.white, fontSize: 14 * scale, fontWeight: '700', textAlign: 'right' },
     quoteDivider: {
       height: 1,
       backgroundColor: C.glassBorder,
@@ -2274,18 +3086,44 @@ function createStyles(
       backgroundColor: C.glassBorder,
       marginVertical: 14,
     },
+    verseBadgeRow: {
+      flexDirection: 'row-reverse',
+      alignItems: 'center',
+      gap: 5,
+      marginBottom: 8,
+    },
+    verseBadgeText: {
+      color: '#D9C45B',
+      fontSize: 11 * scale,
+      fontWeight: '700',
+      textAlign: 'right',
+    },
+    verseText: {
+      fontFamily: QURAN_FONT_FAMILY,
+      color: '#F2E9CE',
+      fontSize: 16 * scale,
+      lineHeight: 30 * scale,
+      fontWeight: '600',
+      marginBottom: 6,
+      textAlign: 'right',
+      writingDirection: 'rtl',
+    },
     quoteText: {
       color: 'rgba(255,255,255,0.88)',
       fontSize: 13 * scale,
       lineHeight: 22 * scale,
       fontWeight: '600',
       marginBottom: 6,
+      textAlign: 'right',
+      writingDirection: 'rtl',
     },
     quoteSource: {
       color: C.neonBlue,
       fontSize: 12 * scale,
       fontWeight: '500',
       marginBottom: 2,
+      textAlign: 'right',
+      writingDirection: 'rtl',
     },
   });
 }

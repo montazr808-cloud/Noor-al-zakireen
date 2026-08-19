@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { type ReactElement } from 'react';
-import { ImageBackground, Linking, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ImageBackground, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
@@ -130,5 +132,5 @@ const styles = StyleSheet.create({
     color: C.white, fontSize: 15, fontWeight: '700', marginBottom: 2,
     textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3,
   },
-  rowDesc: { color: C.muted, fontSize: 12 },
+  rowDesc: { color: C.muted, fontSize: 12, textAlign: 'right',},
 });

@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { type ReactElement } from 'react';
-import { Image, ImageBackground, Linking, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, ImageBackground, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
@@ -33,14 +35,17 @@ export default function AboutScreen() {
           <View style={{ width: 34 }} />
         </View>
 
-        {/* لوغو + اسم */}
+        {/* لوغو + اسم - توهج نيوني حقيقي (حلقة شفافة) بدل الظل، لأن خاصية
+            elevation بأندرويد تتجاهل shadowColor وتطلع ظل أسود دايماً */}
         <View style={styles.logoBox}>
-          <View style={styles.logoCircle}>
-            <Image
-              source={require('../../assets/logo.png')}
-              style={styles.logoImage}
-              resizeMode="contain"
-            />
+          <View style={styles.logoGlowRing}>
+            <View style={styles.logoCircle}>
+              <Image
+                source={require('../../assets/logo.png')}
+                style={styles.logoImage}
+                resizeMode="contain"
+              />
+            </View>
           </View>
           <Text style={styles.appName}>نور الذاكرين</Text>
           <Text style={styles.appSlogan}>رفيقك في الذكر والدعاء</Text>
@@ -99,7 +104,7 @@ export default function AboutScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.row}
-            onPress={() => router.push('/privacy-policy')}
+            onPress={() => router.push('/settings/privacy-policy')}
             activeOpacity={0.75}
           >
             <View style={[styles.iconBox, { backgroundColor: '#64748b' }]}>
@@ -157,11 +162,17 @@ const styles = StyleSheet.create({
   },
 
   logoBox: { alignItems: 'center', paddingVertical: 28, gap: 8 },
+  // حلقة توهج نيوني حقيقية (خلفية شفافة بلون نيوني + دائرة أكبر شوي من اللوغو
+  // نفسه) - تشتغل بنفس الشكل بالضبط على أندرويد وآيفون، بعكس shadow/elevation
+  logoGlowRing: {
+    width: 92, height: 92, borderRadius: 46,
+    backgroundColor: 'rgba(87,200,242,0.18)',
+    justifyContent: 'center', alignItems: 'center',
+  },
   logoCircle: {
     width: 76, height: 76, borderRadius: 38,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    backgroundColor: C.glass, borderWidth: 1.5, borderColor: 'rgba(87,200,242,0.65)',
     justifyContent: 'center', alignItems: 'center',
-    shadowColor: C.neonBlue, shadowOpacity: 0.4, shadowRadius: 18, shadowOffset: { width: 0, height: 0 }, elevation: 8,
   },
   logoImage: {
     width: 56, height: 56,
@@ -178,17 +189,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.glassBorder,
     backgroundColor: C.glass,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 6,
   },
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
   rowBorder: { borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.12)' },
-  rowLabel: { color: C.muted, fontSize: 13, flex: 1 },
-  rowValue: { color: C.white, fontSize: 13, fontWeight: '600' },
+  rowLabel: { color: C.muted, fontSize: 13, flex: 1, textAlign: 'right',},
+  rowValue: { color: C.white, fontSize: 13, fontWeight: '600', textAlign: 'right',},
   iconBox: { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  linkText: { color: C.white, fontSize: 14, fontWeight: '600', flex: 1 },
+  linkText: { color: C.white, fontSize: 14, fontWeight: '600', flex: 1, textAlign: 'right',},
   footer: { color: C.muted, fontSize: 12, textAlign: 'center', marginTop: 28 },
 });

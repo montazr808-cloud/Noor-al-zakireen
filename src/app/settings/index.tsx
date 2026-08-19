@@ -3,9 +3,7 @@ import { useRouter } from 'expo-router';
 import { type ReactElement, useEffect, useRef } from 'react';
 import {
   Animated,
-  Easing,
   ImageBackground,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +11,8 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
@@ -43,12 +43,11 @@ const SETTINGS: SettingItem[] = [
   { id: 'calendar',         title: 'التقويم',              desc: 'هجري وميلادي والمناسبات الدينية',        icon: 'calendar',             color: '#9333ea', route: '/settings/calendar' },
   { id: 'background',       title: 'الخلفيات',             desc: 'خلفية التطبيق',                          icon: 'image',                color: '#7c3aed', route: '/settings/background' },
   { id: 'phone-wallpapers', title: 'خلفيات الهاتف',        desc: 'صور إسلامية لتحميلها كخلفية هاتفك',      icon: 'phone-portrait',       color: '#2563eb', route: '/settings/phone-wallpapers' },
-  { id: 'appearance',       title: 'المظهر',               desc: 'الوضع الليلي وحجم الخط',                 icon: 'moon',                 color: '#2563eb', route: '/settings/appearance' },
   { id: 'app-settings',     title: 'إعدادات التطبيق',      desc: 'الصوت والإشعارات واللغة والخصوصية',      icon: 'settings',             color: '#0891b2', route: '/settings/app-settings' },
   { id: 'rate',             title: 'التقييم والمشاركة',    desc: 'قيّم التطبيق وشاركه مع أصدقائك',         icon: 'star',                 color: '#d97706', route: '/settings/rate' },
   { id: 'contact',          title: 'تواصل معنا',           desc: 'إنستغرام وتيليغرام',                     icon: 'chatbubble-ellipses',  color: '#db2777', route: '/settings/contact' },
   { id: 'support',          title: 'ادعمنا',                desc: 'زين كاش وماستر كارد',                    icon: 'heart',                color: '#10b981', route: '/settings/support' },
-  { id: 'privacy',          title: 'سياسة الخصوصية',       desc: 'اطلع على سياسة الخصوصية',                icon: 'shield-checkmark',     color: '#64748b', route: '/privacy-policy' },
+  { id: 'privacy',          title: 'سياسة الخصوصية',       desc: 'اطلع على سياسة الخصوصية',                icon: 'shield-checkmark',     color: '#64748b', route: '/settings/privacy-policy' },
   { id: 'about',            title: 'حول التطبيق',          desc: 'الإصدار والمطور',                        icon: 'information-circle',   color: '#3b82f6', route: '/settings/about' },
 ];
 
@@ -59,6 +58,12 @@ export default function SettingsIndexScreen() {
   const { width: screenWidth } = useWindowDimensions();
 
   // ===== أنيميشن دخول الصفحة: تنزلق من اليمين (نفس جهة زر ☰) لليسار، وكأنها طلعت من الزر =====
+  // ⚠️ تعديل: بدّلنا Animated.timing (سرعة ثابتة طول الحركة) لـ Animated.spring
+  // (تسارع طبيعي: تبدأ سريعة وتتباطأ تدريجياً قرب النهاية، بدون أي ارتداد
+  // محسوس بفضل friction/tension المضبوطين) - هذا يحس أنعم وأقرب لحركة
+  // فيزيائية حقيقية بدل الحركة الآلية المتساوية السرعة لـ timing. زائد،
+  // Stack بملف settings/_layout.tsx صار يعطّل انتقاله الأصلي لهذي الشاشة
+  // تحديداً، فهذي الحركة صارت الوحيدة الشغالة بدون تضارب/ارتجاج.
   const slideAnim = useRef(new Animated.Value(screenWidth)).current;
   const scrimAnim = useRef(new Animated.Value(0)).current;
 
@@ -66,13 +71,13 @@ export default function SettingsIndexScreen() {
     Animated.parallel([
       Animated.timing(scrimAnim, {
         toValue: 1,
-        duration: 200,
+        duration: 220,
         useNativeDriver: true,
       }),
-      Animated.timing(slideAnim, {
+      Animated.spring(slideAnim, {
         toValue: 0,
-        duration: 340,
-        easing: Easing.out(Easing.cubic),
+        friction: 26,
+        tension: 220,
         useNativeDriver: true,
       }),
     ]).start();
@@ -210,7 +215,7 @@ const styles = StyleSheet.create({
     color: C.white, fontSize: 15, fontWeight: '700', marginBottom: 2,
     textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3,
   },
-  rowDesc: { color: C.muted, fontSize: 12 },
+  rowDesc: { color: C.muted, fontSize: 12, textAlign: 'right',},
 
   version: { color: C.muted, fontSize: 12, textAlign: 'center', marginTop: 24 },
 });

@@ -3,19 +3,16 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, ImageBackground, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { ImageBackground, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useThemeContext } from '@/contexts/theme-contexts';
 import { getSelectedBackground } from '@/utils/backgroundSettings';
-import {
-  cancelHijriNotifications,
-  getHijriNotifPrefs,
-  HijriNotifPrefs,
-  refreshHijriNotificationsIfNeeded,
-  scheduleHijriNotifications,
-  setHijriNotifPrefs,
-} from '@/utils/hijriNotifications';
-import { getHijriParts, getOccasion, toArabicDigits } from '@/utils/hijriOccasions';
+// نفس المصدر المستخدم بالإشعارات بالضبط - حساب هجري موثوق (يشتغل صح بالاندرويد
+// بعكس Intl.DateTimeFormat اللي كان يفشل بصمت على Hermes) + قائمة مناسبات وحيدة
+// دقيقة، بدل نسخة محلية قديمة كانت فيها أخطاء بتواريخ بعض المعصومين
+import { getHijriParts, getOccasion, HIJRI_OCCASIONS } from '@/utils/hijriOccasions';
 
 export const CALENDAR_PREF_KEY = '@calendar_display_pref';
 export type CalendarPref = 'both' | 'hijri' | 'gregorian';
@@ -30,14 +27,9 @@ const GREG_MONTHS = ['يناير','فبراير','مارس','أبريل','ماي
 const WEEKDAYS = ['أحد','اثنين','ثلاثاء','أربعاء','خميس','جمعة','سبت'];
 const C = { neonBlue: '#57C8F2', glass: 'rgba(255,255,255,0.10)', glassBorder: 'rgba(255,255,255,0.22)' };
 
-function sameDate(a: Date, b: Date): boolean {
-  return a.getDate() === b.getDate() && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
-}
-
-function getWeekDates(anchor: Date): Date[] {
-  const dow = anchor.getDay();
-  const start = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - dow);
-  return Array.from({ length: 7 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+function toArabicDigits(num: number | string): string {
+  const ar = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
+  return String(num).replace(/[0-9]/g, (d) => ar[parseInt(d, 10)]);
 }
 
 export default function CalendarSettingsScreen() {
@@ -49,23 +41,10 @@ export default function CalendarSettingsScreen() {
   const today = useMemo(() => new Date(), []);
   const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState(today);
-  const [monthExpanded, setMonthExpanded] = useState(false);
-
-  const [notifOccasions, setNotifOccasions] = useState(false);
-  const [notifWhiteDays, setNotifWhiteDays] = useState(false);
-  const [notifLoading, setNotifLoading] = useState(false);
+  const [occasionsExpanded, setOccasionsExpanded] = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem(CALENDAR_PREF_KEY).then((v) => { if (v) setSelected(v as CalendarPref); });
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      const prefs = await getHijriNotifPrefs();
-      setNotifOccasions(prefs.occasions);
-      setNotifWhiteDays(prefs.whiteDays);
-      await refreshHijriNotificationsIfNeeded(prefs);
-    })();
   }, []);
 
   const select = async (pref: CalendarPref) => {
@@ -73,46 +52,18 @@ export default function CalendarSettingsScreen() {
     await AsyncStorage.setItem(CALENDAR_PREF_KEY, pref);
   };
 
-  const applyNotifPrefs = async (next: HijriNotifPrefs) => {
-    setNotifOccasions(next.occasions);
-    setNotifWhiteDays(next.whiteDays);
-    await setHijriNotifPrefs(next);
-
-    if (!next.occasions && !next.whiteDays) {
-      await cancelHijriNotifications();
-      return;
-    }
-
-    setNotifLoading(true);
-    const res = await scheduleHijriNotifications(next);
-    setNotifLoading(false);
-
-    if (!res.success) {
-      Alert.alert('التنبيهات', 'الرجاء تفعيل صلاحية الإشعارات من إعدادات الجهاز أولاً');
-      setNotifOccasions(false);
-      setNotifWhiteDays(false);
-      await setHijriNotifPrefs({ occasions: false, whiteDays: false });
-    }
-  };
-
-  const onToggleOccasions = (val: boolean) => applyNotifPrefs({ occasions: val, whiteDays: notifWhiteDays });
-  const onToggleWhiteDays = (val: boolean) => applyNotifPrefs({ occasions: notifOccasions, whiteDays: val });
-
   const year  = viewDate.getFullYear();
   const month = viewDate.getMonth();
   const firstDayOfMonth = new Date(year, month, 1);
   const daysInMonth     = new Date(year, month + 1, 0).getDate();
   const startWeekday    = firstDayOfMonth.getDay();
   const hijriHeader     = getHijriParts(new Date(year, month, 15));
-  const collapsedHijri  = getHijriParts(selectedDate);
 
   const cells: (number | null)[] = [
     ...Array.from({ length: startWeekday }, () => null),
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
   while (cells.length % 7 !== 0) cells.push(null);
-
-  const weekDates = useMemo(() => getWeekDates(selectedDate), [selectedDate]);
 
   const goPrevMonth = () => setViewDate(new Date(year, month - 1, 1));
   const goNextMonth = () => setViewDate(new Date(year, month + 1, 1));
@@ -124,13 +75,12 @@ export default function CalendarSettingsScreen() {
 
   const selH   = getHijriParts(selectedDate);
   const selOcc = getOccasion(selH.month, selH.day);
-  const isSelToday = sameDate(selectedDate, today);
 
   const content = (
     <SafeAreaView style={[s.container, !bgOption.image && { backgroundColor: bgOption.color }]}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <View style={s.header}>
-          <TouchableOpacity onPress={() => router.replace('/settings')} style={s.backBtn}>
+          <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
             <Ionicons name="chevron-forward" size={22} color="#fff" />
           </TouchableOpacity>
           <Text style={s.headerTitle}>التقويم</Text>
@@ -164,142 +114,83 @@ export default function CalendarSettingsScreen() {
           ))}
         </View>
 
-        {/* التقويم - وضع مختصر (أسبوع) أو موسّع (شهر كامل) */}
-        <Text style={s.sectionLabel}>{monthExpanded ? 'الشهر الحالي' : 'هذا الأسبوع'}</Text>
+        {/* التقويم الكامل - شهر بالهجري والميلادي */}
+        <Text style={s.sectionLabel}>الشهر الحالي</Text>
         <View style={s.monthCard}>
           <View style={s.glassOverlay} />
 
           <View style={s.monthNavRow}>
-            {monthExpanded && (
-              <TouchableOpacity onPress={goNextMonth} style={s.navArrow}>
-                <Ionicons name="chevron-back" size={20} color={C.neonBlue} />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={{ alignItems: 'center', flex: 1 }}
-              onPress={() => setMonthExpanded((v) => !v)}
-              activeOpacity={0.7}
-            >
-              {monthExpanded ? (
-                <>
-                  <Text style={s.monthGregorian}>{GREG_MONTHS[month]} {toArabicDigits(year)}</Text>
-                  <Text style={s.monthHijri}>{hijriHeader.month} {toArabicDigits(hijriHeader.year)} هـ</Text>
-                </>
-              ) : (
-                <>
-                  <Text style={s.monthGregorian}>{GREG_MONTHS[selectedDate.getMonth()]} {toArabicDigits(selectedDate.getFullYear())}</Text>
-                  <Text style={s.monthHijri}>{collapsedHijri.month} {toArabicDigits(collapsedHijri.year)} هـ</Text>
-                </>
-              )}
+            <TouchableOpacity onPress={goNextMonth} style={s.navArrow}>
+              <Ionicons name="chevron-back" size={20} color={C.neonBlue} />
             </TouchableOpacity>
-            {monthExpanded && (
-              <TouchableOpacity onPress={goPrevMonth} style={s.navArrow}>
-                <Ionicons name="chevron-forward" size={20} color={C.neonBlue} />
-              </TouchableOpacity>
-            )}
+            <View style={{ alignItems: 'center' }}>
+              <Text style={s.monthGregorian}>{GREG_MONTHS[month]} {toArabicDigits(year)}</Text>
+              <Text style={s.monthHijri}>{hijriHeader.month} {toArabicDigits(hijriHeader.year)} هـ</Text>
+            </View>
+            <TouchableOpacity onPress={goPrevMonth} style={s.navArrow}>
+              <Ionicons name="chevron-forward" size={20} color={C.neonBlue} />
+            </TouchableOpacity>
           </View>
 
           <View style={s.weekRow}>
             {WEEKDAYS.map((w) => <Text key={w} style={s.weekdayLabel}>{w}</Text>)}
           </View>
 
-          {monthExpanded ? (
-            <View style={s.grid}>
-              {cells.map((day, idx) => {
-                if (day === null) return <View key={idx} style={s.cell} />;
-                const cellDate = new Date(year, month, day);
-                const hijri = getHijriParts(cellDate);
-                const occ = getOccasion(hijri.month, hijri.day);
-                return (
-                  <TouchableOpacity
-                    key={idx}
-                    style={[s.cell, s.dayCell, isToday(day) && s.dayCellToday, !isToday(day) && isSelected(day) && s.dayCellSelected]}
-                    onPress={() => setSelectedDate(cellDate)}
-                  >
-                    <Text style={[s.dayGregorian, isToday(day) && s.dayTextToday]}>{toArabicDigits(day)}</Text>
-                    <Text style={[s.dayHijri, isToday(day) && s.dayHijriToday]}>{toArabicDigits(hijri.day)}</Text>
-                    {occ && <View style={[s.occasionDot, { backgroundColor: occ.type === 'sorrow' ? '#9CA3AF' : C.neonBlue }]} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          ) : (
-            <View style={s.grid}>
-              {weekDates.map((d, idx) => {
-                const hijri = getHijriParts(d);
-                const occ = getOccasion(hijri.month, hijri.day);
-                const isTodayCell = sameDate(d, today);
-                const isSelCell = sameDate(d, selectedDate);
-                return (
-                  <TouchableOpacity
-                    key={idx}
-                    style={[s.cell, s.dayCell, isTodayCell && s.dayCellToday, !isTodayCell && isSelCell && s.dayCellSelected]}
-                    onPress={() => setSelectedDate(d)}
-                  >
-                    <Text style={[s.dayGregorian, isTodayCell && s.dayTextToday]}>{toArabicDigits(d.getDate())}</Text>
-                    <Text style={[s.dayHijri, isTodayCell && s.dayHijriToday]}>{toArabicDigits(hijri.day)}</Text>
-                    {occ && <View style={[s.occasionDot, { backgroundColor: occ.type === 'sorrow' ? '#9CA3AF' : C.neonBlue }]} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-
-          <TouchableOpacity style={s.expandToggle} onPress={() => setMonthExpanded((v) => !v)} activeOpacity={0.7}>
-            <Ionicons name={monthExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="rgba(255,255,255,0.5)" />
-          </TouchableOpacity>
+          <View style={s.grid}>
+            {cells.map((day, idx) => {
+              if (day === null) return <View key={idx} style={s.cell} />;
+              const cellDate = new Date(year, month, day);
+              const hijri = getHijriParts(cellDate);
+              const occ = getOccasion(hijri.month, hijri.day);
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  style={[s.cell, s.dayCell, isToday(day) && s.dayCellToday, !isToday(day) && isSelected(day) && s.dayCellSelected]}
+                  onPress={() => setSelectedDate(cellDate)}
+                >
+                  <Text style={[s.dayGregorian, isToday(day) && s.dayTextToday]}>{toArabicDigits(day)}</Text>
+                  <Text style={[s.dayHijri, isToday(day) && s.dayHijriToday]}>{toArabicDigits(hijri.day)}</Text>
+                  {occ && <View style={[s.occasionDot, { backgroundColor: occ.type === 'sorrow' ? '#9CA3AF' : C.neonBlue }]} />}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
 
-        {/* تفاصيل اليوم المحدد - مناسبة هذا اليوم فقط إن وجدت */}
+        {/* تفاصيل اليوم المحدد */}
         <View style={s.selCard}>
           <View style={s.glassOverlay} />
           <Ionicons name={selOcc ? 'sparkles' : 'calendar-outline'} size={16} color={C.neonBlue} />
           <View style={{ flex: 1 }}>
             <Text style={s.selDateText}>
-              <Text style={s.selDateLabel}>{isSelToday ? 'اليوم' : WEEKDAYS[selectedDate.getDay()]}</Text>
-              {'  '}{toArabicDigits(selectedDate.getDate())} {GREG_MONTHS[selectedDate.getMonth()]} {toArabicDigits(selectedDate.getFullYear())} م
+              {WEEKDAYS[selectedDate.getDay()]} {toArabicDigits(selectedDate.getDate())} {GREG_MONTHS[selectedDate.getMonth()]} {toArabicDigits(selectedDate.getFullYear())} م
               {'  •  '}{toArabicDigits(selH.day)} {selH.month} {toArabicDigits(selH.year)} هـ
             </Text>
             {selOcc && <Text style={[s.selOccText, { color: selOcc.type === 'sorrow' ? '#9CA3AF' : C.neonBlue }]}>{selOcc.name}</Text>}
           </View>
         </View>
 
-        {/* تنبيهات المناسبات الهجرية والأيام البيض */}
-        <Text style={s.sectionLabel}>الإشعارات والتنبيهات</Text>
-        <View style={s.card}>
-          <View style={s.glassOverlay} />
-          <View style={[s.row, s.rowBorder]}>
-            <View style={[s.iconCircle, notifOccasions && s.iconCircleActive]}>
-              <Ionicons name="notifications-outline" size={18} color={notifOccasions ? C.neonBlue : 'rgba(255,255,255,0.6)'} />
-            </View>
-            <View style={s.rowContent}>
-              <Text style={s.rowTitle}>تنبيهات المناسبات الهجرية</Text>
-              <Text style={s.rowDesc}>إشعار في يوم كل مناسبة دينية (وفيات، أعياد، مواليد)</Text>
-            </View>
-            <Switch
-              value={notifOccasions}
-              onValueChange={onToggleOccasions}
-              trackColor={{ false: 'rgba(255,255,255,0.15)', true: 'rgba(87,200,242,0.5)' }}
-              thumbColor={notifOccasions ? C.neonBlue : '#ccc'}
-            />
+        {/* كل المناسبات الهجرية الشيعية - مدمجة بالشاشة */}
+        <TouchableOpacity style={s.occHeaderRow} onPress={() => setOccasionsExpanded((v) => !v)} activeOpacity={0.7}>
+          <Text style={s.sectionLabel}>كل المناسبات الهجرية</Text>
+          <Ionicons name={occasionsExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="rgba(255,255,255,0.5)" />
+        </TouchableOpacity>
+
+        {occasionsExpanded && (
+          <View style={s.occListCard}>
+            <View style={s.glassOverlay} />
+            {HIJRI_OCCASIONS.map((o, i) => {
+              const [m, d] = o.key.split('-');
+              return (
+                <View key={o.key} style={[s.occRow, i < HIJRI_OCCASIONS.length - 1 && s.rowBorder]}>
+                  <View style={[s.occDotBig, { backgroundColor: o.type === 'sorrow' ? '#9CA3AF' : C.neonBlue }]} />
+                  <Text style={s.occRowName}>{o.name}</Text>
+                  <Text style={s.occRowDate}>{toArabicDigits(d)} {m}</Text>
+                </View>
+              );
+            })}
           </View>
-          <View style={s.row}>
-            <View style={[s.iconCircle, notifWhiteDays && s.iconCircleActive]}>
-              <Ionicons name="moon-outline" size={18} color={notifWhiteDays ? C.neonBlue : 'rgba(255,255,255,0.6)'} />
-            </View>
-            <View style={s.rowContent}>
-              <Text style={s.rowTitle}>تنبيهات الأيام البيض</Text>
-              <Text style={s.rowDesc}>١٣ - ١٤ - ١٥ من كل شهر هجري، وتنبيه خاص برجب وشعبان</Text>
-            </View>
-            <Switch
-              value={notifWhiteDays}
-              onValueChange={onToggleWhiteDays}
-              trackColor={{ false: 'rgba(255,255,255,0.15)', true: 'rgba(87,200,242,0.5)' }}
-              thumbColor={notifWhiteDays ? C.neonBlue : '#ccc'}
-            />
-          </View>
-        </View>
-        {notifLoading && <Text style={s.notifLoadingText}>...جاري جدولة التنبيهات</Text>}
+        )}
 
         <View style={s.previewCard}>
           <View style={s.glassOverlay} />
@@ -328,10 +219,8 @@ function getPreview(pref: CalendarPref): string {
   const days = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
   const months = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
   const gregorian = `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} م`;
-  let hijri = '';
-  try {
-    hijri = new Intl.DateTimeFormat('ar', { calendar: 'islamic-civil', day: 'numeric', month: 'long', year: 'numeric' }).format(d).replace(/\s*هـ\.?\s*/g, '').trim() + ' هـ';
-  } catch { hijri = ''; }
+  const hParts = getHijriParts(d);
+  const hijri = hParts.day ? `${toArabicDigits(hParts.day)} ${hParts.month} ${toArabicDigits(hParts.year)} هـ` : '';
   const day = days[d.getDay()];
   if (pref === 'hijri')     return hijri ? `${day} | ${hijri}` : `${day} | ${gregorian}`;
   if (pref === 'gregorian') return `${day} | ${gregorian}`;
@@ -379,14 +268,17 @@ const s = StyleSheet.create({
   dayTextToday: { color: C.neonBlue },
   dayHijriToday: { color: 'rgba(87,200,242,0.85)' },
   occasionDot: { position: 'absolute', bottom: 4, width: 4, height: 4, borderRadius: 2 },
-  expandToggle: { alignItems: 'center', paddingTop: 8 },
 
   selCard: { flexDirection: 'row-reverse', alignItems: 'center', gap: 10, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: C.glassBorder, paddingHorizontal: 16, paddingVertical: 12, marginBottom: 20 },
   selDateText: { color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: '600', textAlign: 'right' },
-  selDateLabel: { color: '#fff', fontWeight: '800', fontSize: 13 },
   selOccText: { fontSize: 12, fontWeight: '700', textAlign: 'right', marginTop: 3 },
 
-  notifLoadingText: { color: 'rgba(255,255,255,0.4)', fontSize: 11, textAlign: 'center', marginTop: -12, marginBottom: 16 },
+  occHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  occListCard: { borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: C.glassBorder, marginBottom: 20 },
+  occRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12 },
+  occDotBig: { width: 8, height: 8, borderRadius: 4 },
+  occRowName: { color: '#fff', fontSize: 13, fontWeight: '600', flex: 1, textAlign: 'right' },
+  occRowDate: { color: C.neonBlue, fontSize: 11.5, fontWeight: '700' },
 
   previewCard: { borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: C.glassBorder, padding: 20, alignItems: 'center' },
   previewLabel: { color: 'rgba(255,255,255,0.35)', fontSize: 11, marginBottom: 10 },

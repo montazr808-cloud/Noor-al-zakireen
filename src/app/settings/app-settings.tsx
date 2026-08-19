@@ -1,8 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useEffect, useState, type ReactElement } from 'react';
-import { ImageBackground, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ImageBackground, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
@@ -10,42 +13,47 @@ import { getSelectedBackground } from '@/utils/backgroundSettings';
 
 // ===== باليت مطابقة لشاشة التسبيح =====
 const C = {
-  navy: '#1C2B39',
-  cream: '#EFE3C8',
   blue: '#3FA9D9',
-  blueDim: 'rgba(63,169,217,0.18)',
   neonBlue: '#57C8F2',
-  white: '#FFFFFF',
   glass: 'rgba(255,255,255,0.10)',
   glassBorder: 'rgba(255,255,255,0.22)',
   muted: 'rgba(255,255,255,0.5)',
 };
 
 const KEY = '@app_settings_v2';
+// نفس مفاتيح الصوت/الاهتزاز المستخدمة فعلياً بشاشة التسبيح (tasbih.tsx) -
+// قبل هذا التعديل كان هذا الملف يخزن بمفتاح "@app_settings_v2" ومحد يقرأه،
+// فالمفتاحين هنا صاروا نفس المصدر عشان يشتغلوا فعلياً
+const SOUND_KEY = '@tasbih_sound_v1';
+const VIBRATION_KEY = '@app_vibration_v1';
 
 export default function AppSettingsScreen() {
   const router = useRouter();
-  const { backgroundId } = useThemeContext();
+  const { backgroundId, fontSize, setFontSize } = useThemeContext();
   const bgOption = getSelectedBackground(backgroundId);
 
   const [sound, setSound] = useState(true);
   const [vibration, setVibration] = useState(true);
   const [notifications, setNotifications] = useState(true);
   const [autoQuran, setAutoQuran] = useState(false);
-  const [tajweed, setTajweed] = useState(true);
+  const [tajweed, setTajweed] = useState(false);
 
   useEffect(() => { load(); }, []);
 
   const load = async () => {
     try {
-      const saved = await AsyncStorage.getItem(KEY);
+      const [savedSound, savedVibration, saved] = await Promise.all([
+        AsyncStorage.getItem(SOUND_KEY),
+        AsyncStorage.getItem(VIBRATION_KEY),
+        AsyncStorage.getItem(KEY),
+      ]);
+      setSound(savedSound === null ? true : savedSound === '1');
+      setVibration(savedVibration === null ? true : savedVibration === '1');
       if (saved) {
         const d = JSON.parse(saved);
-        setSound(d.sound ?? true);
-        setVibration(d.vibration ?? true);
         setNotifications(d.notifications ?? true);
         setAutoQuran(d.autoQuran ?? false);
-        setTajweed(d.tajweed ?? true);
+        setTajweed(d.tajweed ?? false);
       }
     } catch (_) {}
   };
@@ -58,9 +66,25 @@ export default function AppSettingsScreen() {
     } catch (_) {}
   };
 
-  const clearData = async () => {
-    await AsyncStorage.clear();
-    router.replace('/');
+  const clearData = () => {
+    Alert.alert(
+      'مسح كل البيانات',
+      'راح تنمسح جميع بياناتك (التسبيح، المفضلة، سجل الأسئلة، الإعدادات) ولا يمكن التراجع عن هذا الإجراء. متأكد تريد تكمل؟',
+      [
+        { text: 'إلغاء', style: 'cancel' },
+        {
+          text: 'مسح',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await AsyncStorage.clear();
+              router.replace('/');
+            } catch (_) {}
+          },
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   const screenContent = (
@@ -87,7 +111,7 @@ export default function AppSettingsScreen() {
               <Text style={styles.rowTitle}>صوت التسبيح</Text>
               <Text style={styles.rowDesc}>تشغيل صوت عند كل عدة</Text>
             </View>
-            <Switch value={sound} onValueChange={(v) => { setSound(v); save({ sound: v }); }}
+            <Switch value={sound} onValueChange={(v) => { setSound(v); AsyncStorage.setItem(SOUND_KEY, v ? '1' : '0').catch(() => {}); }}
               trackColor={{ false: 'rgba(255,255,255,0.15)', true: C.blue }} thumbColor={sound ? '#10b981' : '#94a3b8'} />
           </View>
           <View style={styles.row}>
@@ -98,8 +122,60 @@ export default function AppSettingsScreen() {
               <Text style={styles.rowTitle}>الاهتزاز</Text>
               <Text style={styles.rowDesc}>اهتزاز عند اكتمال الدورة</Text>
             </View>
-            <Switch value={vibration} onValueChange={(v) => { setVibration(v); save({ vibration: v }); }}
+            <Switch value={vibration} onValueChange={(v) => { setVibration(v); AsyncStorage.setItem(VIBRATION_KEY, v ? '1' : '0').catch(() => {}); }}
               trackColor={{ false: 'rgba(255,255,255,0.15)', true: C.blue }} thumbColor={vibration ? '#10b981' : '#94a3b8'} />
+          </View>
+        </View>
+
+        {/* حجم الخط */}
+        <Text style={styles.sectionLabel}>حجم الخط</Text>
+        <View style={styles.glassCard}>
+          {[
+            { key: 'small', label: 'صغير', desc: 'مناسب للشاشات الصغيرة' },
+            { key: 'normal', label: 'عادي', desc: 'الحجم الافتراضي' },
+            { key: 'large', label: 'كبير', desc: 'أوضح للقراءة' },
+          ].map((item, index, arr) => {
+            const isSelected = fontSize === item.key;
+            return (
+              <TouchableOpacity
+                key={item.key}
+                style={[styles.row, index < arr.length - 1 && styles.rowBorder]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setFontSize(item.key as any);
+                }}
+                activeOpacity={0.75}
+              >
+                <View style={[styles.iconBox, { backgroundColor: 'rgba(124,58,237,0.25)' }]}>
+                  <Ionicons name="text" size={18} color="#a78bfa" />
+                </View>
+                <View style={styles.rowContent}>
+                  <Text style={styles.rowTitle}>{item.label}</Text>
+                  <Text style={styles.rowDesc}>{item.desc}</Text>
+                </View>
+                {isSelected && (
+                  <Ionicons name="checkmark-circle" size={22} color={C.neonBlue} />
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* اللغة */}
+        <Text style={styles.sectionLabel}>اللغة</Text>
+        <View style={styles.glassCard}>
+          <View style={styles.row}>
+            <View style={[styles.iconBox, { backgroundColor: 'rgba(63,169,217,0.2)' }]}>
+              <Ionicons name="language" size={18} color={C.neonBlue} />
+            </View>
+            <View style={styles.rowContent}>
+              <View style={styles.titleRow}>
+                <Text style={styles.rowTitle}>لغة التطبيق</Text>
+                <View style={styles.soonBadge}><Text style={styles.soonText}>قريباً</Text></View>
+              </View>
+              <Text style={styles.rowDesc}>عربي · English · فارسی</Text>
+            </View>
+            <Ionicons name="chevron-back" size={18} color={C.muted} />
           </View>
         </View>
 
@@ -227,7 +303,7 @@ const styles = StyleSheet.create({
   rowContent: { flex: 1 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rowTitle: { color: '#fff', fontSize: 15, fontWeight: '700', marginBottom: 2, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
-  rowDesc: { color: C.muted, fontSize: 12 },
+  rowDesc: { color: C.muted, fontSize: 12, textAlign: 'right',},
   soonBadge: {
     backgroundColor: 'rgba(87,200,242,0.18)',
     borderWidth: 1,

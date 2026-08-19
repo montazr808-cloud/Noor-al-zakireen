@@ -4,18 +4,19 @@ import { type ReactElement, useEffect, useState } from 'react';
 import {
   Image,
   ImageBackground,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
+import { getSelectedMarja, Marja, MARJA_INFO, setSelectedMarja } from '@/utils/askSheikh';
 import { getSelectedBackground } from '@/utils/backgroundSettings';
-import { getSelectedMarja, Marja, MARJA_INFO, setSelectedMarja } from '../api/askSheikh';
 
 // ===== باليت مطابقة لشاشة التسبيح =====
 const C = {
@@ -160,7 +161,7 @@ const styles = StyleSheet.create({
     color: C.white, fontSize: 16, fontWeight: '700', marginBottom: 4,
     textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3,
   },
-  currentStatus: { fontSize: 12, fontWeight: '600' },
+  currentStatus: { fontSize: 12, fontWeight: '600', textAlign: 'right',},
   sectionLabel: { color: C.muted, fontSize: 12, fontWeight: '600', marginBottom: 8, marginRight: 4 },
 
   glassCard: {
@@ -180,6 +181,6 @@ const styles = StyleSheet.create({
   rowActive: { backgroundColor: 'rgba(87,200,242,0.14)' },
   avatarSmall: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(0,0,0,0.2)' },
   rowContent: { flex: 1 },
-  rowTitle: { color: C.muted, fontSize: 14, fontWeight: '700', marginBottom: 2 },
-  rowDesc: { color: 'rgba(255,255,255,0.35)', fontSize: 11 },
+  rowTitle: { color: C.muted, fontSize: 14, fontWeight: '700', marginBottom: 2, textAlign: 'right',},
+  rowDesc: { color: 'rgba(255,255,255,0.35)', fontSize: 11, textAlign: 'right',},
 });

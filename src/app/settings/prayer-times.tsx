@@ -1,12 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Audio } from 'expo-av';
+import { AudioPlayer, createAudioPlayer } from 'expo-audio';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
-import { type ReactElement, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,7 +14,6 @@ import {
   Linking,
   Modal,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -23,10 +22,24 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+// ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
 import { getSelectedBackground } from '@/utils/backgroundSettings';
+import {
+  ADDITIONAL_MUEZZIN_VOICES,
+  CUSTOM_VOICE_FILES_KEY,
+  CUSTOM_VOICES_LIST_KEY,
+  DEFAULT_VOICE_ID,
+  MUEZZIN_VOICES,
+  SELECTED_VOICE_KEY,
+  type CustomVoice,
+} from '@/utils/muezzinVoices';
+import { scheduleAzanNotifications } from '@/utils/notifeeAzan';
+import { scheduleAthkarNotifications } from '@/utils/notificationScheduler';
+import { geocodeAddress, getPrayerTimes } from '@/utils/prayerCalc';
 
 // إعداد سلوك الإشعارات - تطلع كتنبيه + صوت حتى لو التطبيق مفتوح
 Notifications.setNotificationHandler({
@@ -59,60 +72,11 @@ const AR_DIGITS = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
 const toArabicDigits = (input: string | number) =>
   String(input).replace(/[0-9]/g, (d) => AR_DIGITS[parseInt(d, 10)]);
 
-/**
- * ===========================================================
- * أصوات المؤذنين - طريقة التفعيل:
- *
- * المسارات بالأسفل صارت مربوطة مسبقاً بالكود (require)، كل الي
- * تحتاجه هو تحط ملفات mp3 الفعلية بنفس الأسماء بهذا المسار:
- *
- *    assets/sounds/adhan/
- *
- * بنفس أسماء الملفات المكتوبة بكل require() بالأسفل، مثلاً:
- *    assets/sounds/adhan/abu_zar_halawaji.mp3
- *
- * شغّل الأمر بالترمنل (بجذر المشروع) عشان يصير عندك المجلد
- * والملفات الفارغة جاهزة بنفس الأسماء تماماً، بعدين تسحب عليها
- * ملفات الصوت الحقيقية وتستبدلها (drag & drop بنفس الاسم):
- *
- *    $files = @("abu_zar_halawaji","amer_khafaji","maytham_tammar","osama_karbalaei","ali_kaabi","amer_kadhimi","rafe_kadhimi","saeed_tousi","hussein_ali_sharif","karim_mansouri")
- *    New-Item -ItemType Directory -Path "assets\sounds\adhan" -Force | Out-Null
- *    foreach ($f in $files) { New-Item -ItemType File -Path "assets\sounds\adhan\$f.mp3" -Force | Out-Null }
- *
- * ملاحظة مهمة عن عمق المسار: "../../assets/..." مبني على افتراض
- * إنه هذا الملف موجود بـ src/app/settings/prayer-times.tsx وإنه
- * مجلد assets موجود جوا src (يعني src/assets/sounds/adhan)، بنفس
- * مكان باقي أصول التطبيق (backgrounds, fonts, maraji). إذا صارلك
- * خطأ "Cannot find module"، تأكد المجلد فعلاً جوا src/assets مو
- * بجذر المشروع، وعدّل عدد ../ إذا احتاج.
- * ===========================================================
- */
-type MuezzinVoice = {
-  id: string;
-  label: string;
-  flag: string;
-  country: string;
-  note: string;
-  file: any;
-};
-
-const MUEZZIN_VOICES: MuezzinVoice[] = [
-  { id: 'abu_zar_halawaji', label: 'أباذر الحلواجي', flag: '🇮🇶', country: 'العراق', note: 'رادود ومؤذن عراقي مشهور، له ألبومات أذان', file: require('../../assets/sounds/adhan/abu_zar_halawaji.mp3') },
-  { id: 'amer_kadhimi', label: 'عامر الكاظمي', flag: '🇮🇶', country: 'العراق', note: 'قارئ من الكاظمية، مركز أول عالمي بالأذان', file: require('../../assets/sounds/adhan/amer_kadhimi.mp3') },
-  { id: 'osama_karbalaei', label: 'الحاج أسامة الكربلائي', flag: '🇮🇶', country: 'العراق', note: 'مؤذن العتبتين الحسينية والعباسية المقدستين', file: require('../../assets/sounds/adhan/osama_karbalaei.mp3') },
-  { id: 'amer_khafaji', label: 'عامر الخفاجي', flag: '🇮🇶', country: 'العراق', note: 'مؤذن الروضة الكاظمية المطهرة في بغداد', file: require('../../assets/sounds/adhan/amer_khafaji.mp3') },
-  { id: 'saeed_tousi', label: 'سعيد الطوسي', flag: '🇮🇷', country: 'إيران', note: 'قارئ ومؤذن إيراني من طهران', file: require('../../assets/sounds/adhan/saeed_tousi.mp3') },
-];
-
-// ===== أصوات إضافية (مو مرفوعة بالتطبيق) - المستخدم يدوّرها بيوتيوب ويستوردها بنفسه =====
-type AdditionalVoice = { id: string; label: string; flag: string; country: string; note: string };
-const ADDITIONAL_MUEZZIN_VOICES: AdditionalVoice[] = [
-  { id: 'rafe_kadhimi', label: 'رافع الكاظمي', flag: '🇮🇶', country: 'العراق', note: 'مؤذن العتبة الكاظمية المقدسة في بغداد' },
-  { id: 'maytham_tammar', label: 'ميثم التمار', flag: '🇮🇶', country: 'العراق', note: 'مؤذن عراقي، أذان بمقام الحجاز' },
-  { id: 'ali_kaabi', label: 'علي الكعبي', flag: '🇮🇶', country: 'العراق', note: 'مؤذن العتبة الحسينية المقدسة في كربلاء' },
-  { id: 'hussein_ali_sharif', label: 'حسين علي شريف', flag: '🇮🇷', country: 'إيران', note: 'قارئ ومؤذن إيراني مشهور' },
-  { id: 'karim_mansouri', label: 'كريم منصوري', flag: '🇮🇷', country: 'إيران', note: 'قارئ ومؤذن إيراني من عبادان' },
-];
+// ===== أصوات المؤذنين =====
+// البيانات (الأصوات الجاهزة + الإضافية) صارت مستوردة من utils/muezzinVoices.ts
+// بدل ما تتعرف هنا محلياً - هذا المصدر المشترك الوحيد اللي يعتمد عليه أيضاً
+// utils/notifeeAzan.ts (تشغيل الأذان الفعلي بالخلفية)، حتى ما يصير اختلاف
+// بين شنو يبين بهذي الشاشة وشنو فعلياً ينشغل وقت الأذان.
 
 type PrayerKey = 'fajr' | 'sunrise' | 'dhuhr' | 'asr' | 'maghrib' | 'isha';
 type PrayerTimes = Record<PrayerKey, string>;
@@ -136,17 +100,24 @@ const CALC_METHOD_LABEL = 'الطريقة الجعفرية (الشيعة الا�
 /**
  * ملاحظة مهمة عن طريقة الحساب: جربنا زاوية "طهران" الفلكية (١٧.٧° فجر،
  * ٤.٥° مغرب) بافتراض إنها تحل الفرق مع تطبيق الكفيل تلقائياً، لكن
- * المقارنة الفعلية (٢٠٢٦-٠٧-١١، بغداد/الكاظمية) أثبتت إنه الفرق ضل
- * موجود: فجرنا متأخر ١٢ دقيقة عن الكفيل، ومغربنا متأخر ٤ دقايق. يعني
- * الزاوية النظرية وحدها ما كانت كافية.
+ * المقارنة الفعلية أثبتت إنه الفرق يضل موجود ويتغير:
  *
- * الحل الفعلي المعتمد الآن: أبقينا زاوية طهران (لأنها صحيحة فلكياً
- * وتتحرك صح مع الفصول)، وفوقها أضفنا معايرة tune يدوية مبنية على
- * فرق حقيقي مقاس (مو تخمين): فجر -١٢ دقيقة، مغرب -٤ دقايق. هذا الجمع
- * (زاوية صحيحة + تصحيح تجريبي) أدق من الاعتماد على وحدة بس.
+ *   - قياس ٢٠٢٦-٠٧-١١: فجرنا متأخر ١٢ دقيقة عن الكفيل، مغربنا متأخر ٤ دقايق
+ *     → تم اعتماد tune: فجر -١٢، مغرب -٤
+ *   - قياس ٢٠٢٦-٠٧-١٤ (بعد ٣ أيام فقط): بنفس التعديل صار فجرنا مبكر ١٠
+ *     دقايق عن الكفيل (٣:١٢ بدل ٣:٢٢)، ومغربنا مبكر دقيقة وحدة (٧:٣٠ بدل ٧:٣١)
+ *     → تم تعديل tune الحين إلى: فجر -٢، مغرب -٣
+ *
+ * يعني الفرق مع الكفيل نفسه مو ثابت بمرور الأيام (يمكن الكفيل يستخدم
+ * منهج فلكي مختلف يتحرك بسرعة غير سرعة زاوية طهران مع تغيّر الفصل).
+ * هذا معناه إن رقم tune ثابت وحدة راح تكرر تنحرف كل كم يوم، وهذا
+ * الأصلح فعلياً هو مقارنة دورية (كل أسبوعين تقريباً) وتحديث الرقم، مو
+ * حل نهائي دائم. إذا حبيت حل أدق وأثبت على المدى الطويل، بديل مقترح:
+ * التبديل لمكتبة حساب محلية (مثل adhan-js) بمنهج Jafari المدمج فيها
+ * بدل الاعتماد على tune يدوي فوق منهج مخصص.
  *
  * إذا لاحظت الفرق يتغير بمرور الوقت (خصوصاً قبل رمضان)، قارن وياهم
- * من جديد وعدّل رقمي "-12" و"-4" بمعامل tune بالأسفل (ترتيبه:
+ * من جديد وعدّل رقمي الفجر والمغرب بمعامل tune بالأسفل (ترتيبه:
  * Imsak,Fajr,Sunrise,Dhuhr,Asr,Maghrib,Sunset,Isha,Midnight).
  */
 
@@ -154,8 +125,13 @@ const CALC_METHOD_LABEL = 'الطريقة الجعفرية (الشيعة الا�
 const NOTIF_SETTINGS_KEY = 'noor_prayerNotifSettings';
 const LEAD_MINUTES_KEY = 'noor_prayerLeadMinutes';
 const NOTIF_IDS_KEY = 'noor_prayerNotifIds';
-const CUSTOM_VOICE_FILES_KEY = 'noor_additionalVoiceFiles'; // ملفات مستوردة للأصوات الإضافية الجاهزة
-const CUSTOM_VOICES_LIST_KEY = 'noor_customVoicesList'; // أصوات مخصصة أضافها المستخدم بنفسه
+// إحداثيات آخر موقع محسوب - نخزنها حتى نقدر نجدول تنبيهات الأذكار (نظام
+// منفصل عن تنبيهات "قربت الصلاة" فوگ) بدون لا نحتاج نطلب الموقع من جديد
+const SAVED_COORDS_KEY = 'noor_savedCoords';
+// ملاحظة: CUSTOM_VOICE_FILES_KEY / CUSTOM_VOICES_LIST_KEY / SELECTED_VOICE_KEY
+// صارت مستوردة من utils/muezzinVoices.ts (نفس المصدر اللي يعتمد عليه notifeeAzan.ts
+// وقت تشغيل الأذان الفعلي بالخلفية) - عرّفهم هنا محلياً كان يسبب اختلاف/فقدان
+// اختيار المستخدم لصوت المؤذن.
 
 // ===== كل دول العالم (لاختيار الموقع عند تعذّر GPS) - العلم يتولد تلقائياً من كود الدولة =====
 const getFlagEmoji = (countryCode: string) =>
@@ -245,14 +221,21 @@ export default function PrayerTimesScreen() {
   const [manualCity, setManualCity] = useState('');
 
   // ===== ٢. صوت المؤذن + معاينة فعلية =====
-  const [selectedVoice, setSelectedVoice] = useState<string>('abu_zar_halawaji');
+  const [selectedVoice, setSelectedVoice] = useState<string>(DEFAULT_VOICE_ID);
+  // هل خلصنا تحميل الاختيار المحفوظ من AsyncStorage؟ نستخدمها حتى ما نكتب
+  // فوگ التخزين بالقيمة الافتراضية قبل لا نقرا الاختيار الحقيقي المحفوظ
+  const [voiceLoaded, setVoiceLoaded] = useState(false);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
-  const soundRef = useRef<Audio.Sound | null>(null);
+  // ===== اختيار مؤقت (مسودة) لصوت المؤذن - يتغيّر وانت تتصفح القائمة، وما
+  // ينحفظ فعلياً إلا لما تضغط زر "حفظ" الصريح. يخليك تتصفح/تعاين بدون
+  // ما يتغيّر الصوت الفعلي المستخدم بالأذان قبل ما تأكد =====
+  const [pendingVoice, setPendingVoice] = useState<string>(DEFAULT_VOICE_ID);
+  const soundRef = useRef<AudioPlayer | null>(null);
 
   // ===== ٢ب. أصوات إضافية مستوردة يدوياً + أصوات خاصة أضافها المستخدم =====
   const [additionalVoiceFiles, setAdditionalVoiceFiles] = useState<Record<string, string>>({});
-  const [customVoices, setCustomVoices] = useState<{ id: string; label: string; uri: string }[]>([]);
+  const [customVoices, setCustomVoices] = useState<CustomVoice[]>([]);
   const [showAddCustomModal, setShowAddCustomModal] = useState(false);
   const [newCustomName, setNewCustomName] = useState('');
   const [newCustomUri, setNewCustomUri] = useState<string | null>(null);
@@ -264,6 +247,16 @@ export default function PrayerTimesScreen() {
   });
   const [leadMinutes, setLeadMinutes] = useState(15);
   const [showNotifModal, setShowNotifModal] = useState(false);
+  // ===== نسخة مؤقتة (مسودة) من إعدادات التنبيهات - نفس فكرة pendingVoice
+  // فوگ: تتغيّر وانت تلعب بالقائمة داخل شاشة التنبيهات، وما تنحفظ فعلياً
+  // (ولا تنجدول الإشعارات الحقيقية) إلا لما تضغط زر "حفظ" =====
+  const [pendingLeadMinutes, setPendingLeadMinutes] = useState(15);
+  const [pendingNotifSettings, setPendingNotifSettings] = useState<Record<PrayerKey, boolean>>({
+    fajr: true, sunrise: false, dhuhr: true, asr: true, maghrib: true, isha: true,
+  });
+  // نفس مبدأ voiceLoaded بالأسفل - نتجنب كتابة notifSettings/leadMinutes
+  // فوگ القيمة المحفوظة بالتخزين قبل لا نخلص نقرأها أول مرة عند فتح الشاشة
+  const [notifSettingsLoaded, setNotifSettingsLoaded] = useState(false);
 
   // ===== ٤. العد التنازلي للصلاة الجاية (بالثواني) =====
   const [now, setNow] = useState(new Date());
@@ -280,11 +273,21 @@ export default function PrayerTimesScreen() {
     (async () => {
       try {
         const rawSettings = await AsyncStorage.getItem(NOTIF_SETTINGS_KEY);
-        if (rawSettings) setNotifSettings(JSON.parse(rawSettings));
+        if (rawSettings) {
+          const parsed = JSON.parse(rawSettings);
+          setNotifSettings(parsed);
+          setPendingNotifSettings(parsed);
+        }
         const rawLead = await AsyncStorage.getItem(LEAD_MINUTES_KEY);
-        if (rawLead) setLeadMinutes(JSON.parse(rawLead));
+        if (rawLead) {
+          const parsedLead = JSON.parse(rawLead);
+          setLeadMinutes(parsedLead);
+          setPendingLeadMinutes(parsedLead);
+        }
       } catch {
         // تجاهل لو ماكو إعدادات محفوظة بعد
+      } finally {
+        setNotifSettingsLoaded(true);
       }
     })();
   }, []);
@@ -303,14 +306,44 @@ export default function PrayerTimesScreen() {
     })();
   }, []);
 
-  // ===== حفظ الإعدادات تلقائياً كل ما المستخدم يغيّرها =====
+  // ===== تحميل اختيار صوت المؤذن المحفوظ (هذا كان ناقص سابقاً - سبب رجوع
+  // الاختيار للافتراضي كل ما يفتح التطبيق، ونظام الأذان بالخلفية notifeeAzan.ts
+  // ما يعرف شنو اخترت لأنه هذا المفتاح ما كان ينكتب أصلاً) =====
   useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(SELECTED_VOICE_KEY);
+        if (raw) {
+          setSelectedVoice(raw);
+          setPendingVoice(raw);
+        }
+      } catch {
+        // تجاهل - يضل على الافتراضي
+      } finally {
+        setVoiceLoaded(true);
+      }
+    })();
+  }, []);
+
+  // ===== حفظ اختيار صوت المؤذن تلقائياً كل ما يتغير - بنفس المفتاح اللي يقرا
+  // منه notifeeAzan.ts وقت تشغيل الأذان الفعلي بالخلفية =====
+  useEffect(() => {
+    if (!voiceLoaded) return; // نتجنب الكتابة فوگ القيمة المحفوظة قبل لا نقراها
+    AsyncStorage.setItem(SELECTED_VOICE_KEY, selectedVoice).catch(() => {});
+  }, [selectedVoice, voiceLoaded]);
+
+  // ===== حفظ الإعدادات تلقائياً كل ما المستخدم يغيّرها =====
+  // (نتجنب الكتابة فوگ القيمة المحفوظة بالقيم الافتراضية قبل لا نخلص نقرأها
+  // أول - نفس السبب اللي كان يسوي مشكلة "الاختيار يرجع للافتراضي" بصوت المؤذن)
+  useEffect(() => {
+    if (!notifSettingsLoaded) return;
     AsyncStorage.setItem(NOTIF_SETTINGS_KEY, JSON.stringify(notifSettings)).catch(() => {});
-  }, [notifSettings]);
+  }, [notifSettings, notifSettingsLoaded]);
 
   useEffect(() => {
+    if (!notifSettingsLoaded) return;
     AsyncStorage.setItem(LEAD_MINUTES_KEY, JSON.stringify(leadMinutes)).catch(() => {});
-  }, [leadMinutes]);
+  }, [leadMinutes, notifSettingsLoaded]);
 
   useEffect(() => {
     AsyncStorage.setItem(CUSTOM_VOICE_FILES_KEY, JSON.stringify(additionalVoiceFiles)).catch(() => {});
@@ -322,9 +355,9 @@ export default function PrayerTimesScreen() {
 
   // ===== إعادة جدولة الإشعارات الفعلية كل ما تتغير المواقيت أو الإعدادات =====
   useEffect(() => {
-    if (!times) return;
+    if (!times || !notifSettingsLoaded) return;
     scheduleNotificationsForTimes(times, notifSettings, leadMinutes);
-  }, [times, notifSettings, leadMinutes]);
+  }, [times, notifSettings, leadMinutes, notifSettingsLoaded]);
 
   // لما يفشل تحديد الموقع، نفتح اختيار الدولة/المدينة تلقائياً
   useEffect(() => {
@@ -340,12 +373,12 @@ export default function PrayerTimesScreen() {
   // تنظيف الصوت عند مغادرة الشاشة
   useEffect(() => {
     return () => {
-      soundRef.current?.unloadAsync();
+      soundRef.current?.release();
     };
   }, []);
 
   // ===== لما المستخدم يضغط على إشعار الصلاة، نشغّل الأذان الكامل بصوت المؤذن المختار =====
-  // (أنظمة التشغيل ما تسمح بصوت إشعار أطول من ٣٠ ثانية، فهذا البديل العملي: تنبيه قصير،
+  // (أنظمة التشغيل ما تسمح بصوت إشعار أطول من ٣٠ ثانية، فهذا البديل العملي: تنبيه قصير，
   // وبمجرد ما يضغط عليه المستخدم يفتح التطبيق ويشغل الأذان الكامل تلقائياً)
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener(() => {
@@ -429,25 +462,81 @@ export default function PrayerTimesScreen() {
             title: 'قربت الصلاة',
             body: `باقي ${lead} دقيقة على صلاة ${p.title}`,
             sound: true,
+            ...(Platform.OS === 'android' ? { channelId: 'prayer-times' } : {}),
           },
-          trigger: {
-            hour: triggerHour,
-            minute: triggerMinute,
-            repeats: true,
-          } as unknown as Notifications.DailyTriggerInput,
+          trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour: triggerHour, minute: triggerMinute },
         });
         newIds.push(id);
-      } catch {
-        // تجاهل خطأ صلاة وحدة وكمل الباقي
+      } catch (e) {
+        // تجاهل خطأ صلاة وحدة وكمل الباقي - بس نسجل الخطأ الحقيقي بالـ logs
+        console.error(`[prayer-times] فشلت جدولة تنبيه "${p.title}":`, e);
       }
     }
 
     await AsyncStorage.setItem(NOTIF_IDS_KEY, JSON.stringify(newIds));
+
+    // ===== نجدول الأذان الفعلي بالخلفية (notifee, أندرويد) بنفس تفعيل/تعطيل
+    // كل صلاة من هذي الشاشة - حتى يضل متزامن مع تنبيه "قربت الصلاة" فوگ =====
+    if (Platform.OS === 'android') {
+      try {
+        await scheduleAzanNotifications(
+          {
+            fajr: currentTimes.fajr,
+            dhuhr: currentTimes.dhuhr,
+            asr: currentTimes.asr,
+            maghrib: currentTimes.maghrib,
+            isha: currentTimes.isha,
+          },
+          {
+            fajr: settings.fajr,
+            dhuhr: settings.dhuhr,
+            asr: settings.asr,
+            maghrib: settings.maghrib,
+            isha: settings.isha,
+          }
+        );
+      } catch {
+        // ما نوقف باقي الشاشة لأجل هذا - تنبيه "قربت الصلاة" فوگ ضل شغال بأي حال
+      }
+    }
   };
 
-  const fetchPrayerTimes = async () => {
+  // ===== حفظ الإحداثيات وتشغيل جدولة تنبيهات الأذكار (نظام منفصل عن =====
+  // ===== تنبيهات "قربت الصلاة" فوگ - يذكّر بالتعقيب/الذكر بعد دخول وقت الصلاة =====
+  const saveCoordsAndScheduleAthkar = async (latitude: number, longitude: number, city?: string) => {
+    try {
+      await AsyncStorage.setItem(SAVED_COORDS_KEY, JSON.stringify({ latitude, longitude, city }));
+      await scheduleAthkarNotifications({ latitude, longitude });
+    } catch {
+      // ما نوقف الشاشة لأجل هذا - أهم شي أوقات الصلاة تبين للمستخدم بأي حال
+    }
+  };
+
+  const fetchPrayerTimes = async (forceRefresh = false) => {
     setLoading(true);
     setErrorMsg(null);
+
+    // لو عندنا إحداثيات محفوظة من قبل وما طالبين تحديث إجباري، نستخدمها فوراً
+    // بدل طلب GPS جديد كل مرة تفتح الشاشة - هذا يحل مشكلة "يطلب الموقع من جديد
+    // ويحدد من جديد كل ما افتح التطبيق" (الموقع ما يتغير فعلياً بين فتحة وفتحة،
+    // بس التوقيت يتحدث تلقائياً لأنه getPrayerTimes يحسب بالتاريخ الحالي دايماً)
+    if (!forceRefresh) {
+      try {
+        const raw = await AsyncStorage.getItem(SAVED_COORDS_KEY);
+        if (raw) {
+          const cached = JSON.parse(raw);
+          const computed = getPrayerTimes(cached.latitude, cached.longitude);
+          setTimes(computed);
+          if (cached.city) setCityName(cached.city);
+          setLoading(false);
+          scheduleAthkarNotifications({ latitude: cached.latitude, longitude: cached.longitude }).catch(() => {});
+          return;
+        }
+      } catch {
+        // ماكو إحداثيات محفوظة أو تعذرت قراءتها - نكمل لجلب GPS جديد بالأسفل
+      }
+    }
+
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
@@ -459,36 +548,28 @@ export default function PrayerTimesScreen() {
       const location = await Location.getCurrentPositionAsync({});
       const { latitude, longitude } = location.coords;
 
+      let resolvedCity = '';
       try {
         const geo = await Location.reverseGeocodeAsync({ latitude, longitude });
         if (geo && geo[0]) {
-          setCityName(geo[0].city || geo[0].region || '');
+          resolvedCity = geo[0].city || geo[0].region || '';
+          setCityName(resolvedCity);
         }
       } catch {
         // تجاهل لو فشل
       }
 
-      // Aladhan API - method 99 مخصص بزاوية طهران الفلكية (فجر 17.7°) لمطابقة الكفيل
-      const res = await fetch(
-        `https://api.aladhan.com/v1/timings?latitude=${latitude}&longitude=${longitude}&method=99&methodSettings=17.7,4.5,14&school=0&tune=0,-12,0,0,0,-4,0,0,0`
-      );
-      const data = await res.json();
-
-      if (data?.data?.timings) {
-        const t = data.data.timings;
-        setTimes({
-          fajr: t.Fajr,
-          sunrise: t.Sunrise,
-          dhuhr: t.Dhuhr,
-          asr: t.Asr,
-          maghrib: t.Maghrib,
-          isha: t.Isha,
-        });
-      } else {
-        setErrorMsg('ما تم جلب مواقيت الصلاة، حاول مرة ثانية أو دوّر مدينتك بالأسفل');
+      // حساب محلي بمكتبة adhan (زاوية طهران + معايرة يدوية) — بدون اعتماد على إنترنت،
+      // ويحل المنطقة الزمنية تلقائياً من الاحداثيات نفسها
+      try {
+        const computed = getPrayerTimes(latitude, longitude);
+        setTimes(computed);
+        saveCoordsAndScheduleAthkar(latitude, longitude, resolvedCity);
+      } catch {
+        setErrorMsg('صار خطأ بحساب مواقيت الصلاة لهذا الموقع');
       }
     } catch (err) {
-      setErrorMsg('حدث خطأ بالاتصال، تأكد من الإنترنت وحاول مرة ثانية');
+      setErrorMsg('حدث خطأ بتحديد الموقع، تأكد من تفعيل GPS وحاول مرة ثانية');
     } finally {
       setLoading(false);
     }
@@ -500,27 +581,33 @@ export default function PrayerTimesScreen() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(
-        `https://api.aladhan.com/v1/timingsByAddress?address=${encodeURIComponent(address.trim())}&method=99&methodSettings=17.7,4.5,14&school=0&tune=0,-12,0,0,0,-4,0,0,0`
-      );
-      const data = await res.json();
-      if (data?.data?.timings) {
-        const t = data.data.timings;
-        setTimes({
-          fajr: t.Fajr,
-          sunrise: t.Sunrise,
-          dhuhr: t.Dhuhr,
-          asr: t.Asr,
-          maghrib: t.Maghrib,
-          isha: t.Isha,
-        });
-        setCityName(displayName);
-        setShowCitySelector(false);
-      } else {
-        setErrorMsg('ما لكينا نتائج بهذا الموقع، جرب مدينة ثانية');
+      // نجرب Nominatim أول (أثبت مع اسماء الدول/المدن العربية)، وإذا فشلت
+      // نرجع لجيوكودر الجهاز كبديل احتياطي
+      let coords = await geocodeAddress(address.trim());
+      if (!coords) {
+        try {
+          const geocoded = await Location.geocodeAsync(address.trim());
+          if (geocoded && geocoded[0]) {
+            coords = { latitude: geocoded[0].latitude, longitude: geocoded[0].longitude };
+          }
+        } catch {
+          // نتجاهل، بيتعامل معه الشرط تحت
+        }
       }
+
+      if (!coords) {
+        setErrorMsg('ما لكينا نتائج بهذا الموقع، جرب مدينة ثانية أو اكتبها بشكل مختلف');
+        setLoading(false);
+        return;
+      }
+
+      const computed = getPrayerTimes(coords.latitude, coords.longitude);
+      setTimes(computed);
+      setCityName(displayName);
+      setShowCitySelector(false);
+      saveCoordsAndScheduleAthkar(coords.latitude, coords.longitude, displayName);
     } catch {
-      setErrorMsg('حدث خطأ بالاتصال، تأكد من الإنترنت وحاول مرة ثانية');
+      setErrorMsg('حدث خطأ بتحديد الموقع، تأكد من الإنترنت وحاول مرة ثانية');
     } finally {
       setLoading(false);
     }
@@ -605,20 +692,20 @@ export default function PrayerTimesScreen() {
       return;
     }
     try {
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
-      setPreviewingId(id);
-      const source = typeof playableUri === 'string' ? { uri: playableUri } : playableUri;
-      const { sound } = await Audio.Sound.createAsync(source);
-      soundRef.current = sound;
-      await sound.playAsync();
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          setPreviewingId(null);
-        }
-      });
+if (soundRef.current) {
+  soundRef.current.release();
+  soundRef.current = null;
+}
+setPreviewingId(id);
+const source = typeof playableUri === 'string' ? { uri: playableUri } : playableUri;
+const player = createAudioPlayer(source);
+soundRef.current = player;
+player.play();
+player.addListener('playbackStatusUpdate', (status) => {
+  if (status.didJustFinish) {
+    setPreviewingId(null);
+  }
+});
     } catch {
       Alert.alert('خطأ', 'تعذّر تشغيل عينة الصوت');
       setPreviewingId(null);
@@ -627,8 +714,8 @@ export default function PrayerTimesScreen() {
 
   const stopPreview = async () => {
     if (soundRef.current) {
-      await soundRef.current.stopAsync();
-      await soundRef.current.unloadAsync();
+      await soundRef.current.pause();
+      await soundRef.current.release();
       soundRef.current = null;
     }
     setPreviewingId(null);
@@ -665,27 +752,61 @@ export default function PrayerTimesScreen() {
     return { key: next.key, title, isTomorrow, hh, mm, ss };
   }, [times, now]);
 
+  // ===== هل توجد تغييرات غير محفوظة بمسودة التنبيهات؟ (نفس فكرة pendingVoice) =====
+  const notifHasUnsavedChanges =
+    pendingLeadMinutes !== leadMinutes ||
+    (Object.keys(pendingNotifSettings) as PrayerKey[]).some(
+      (k) => pendingNotifSettings[k] !== notifSettings[k]
+    );
+
+  // ===== إغلاق شاشة التنبيهات بدون حفظ - نرجّع المسودة لآخر قيم محفوظة فعلياً =====
+  const discardNotifChangesAndClose = () => {
+    setPendingNotifSettings(notifSettings);
+    setPendingLeadMinutes(leadMinutes);
+    setShowNotifModal(false);
+  };
+
+  // ===== حفظ صريح لمسودة التنبيهات - هذا هو اللي يثبّتها فعلياً (يشغّل
+  // useEffect الجدولة الحقيقية بالأسفل عبر تغيير notifSettings/leadMinutes) =====
+  const saveNotifChanges = () => {
+    setNotifSettings(pendingNotifSettings);
+    setLeadMinutes(pendingLeadMinutes);
+    setShowNotifModal(false);
+    Alert.alert('تم الحفظ', 'انحفظت إعدادات التنبيهات وراح تنجدول على أساسها');
+  };
+
   // ===== محتوى شاشة التنبيهات (تُعرض كصفحة منفصلة عبر Modal، بنفس خلفية التطبيق الزجاجية) =====
   const notifModalContent = (
     <SafeAreaView style={[styles.container, !bgOption.image && { backgroundColor: bgOption.color }]}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => setShowNotifModal(false)} style={styles.backBtn}>
+          <TouchableOpacity onPress={discardNotifChangesAndClose} style={styles.backBtn}>
             <Ionicons name="chevron-forward" size={22} color={C.white} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>التنبيهات</Text>
           <View style={{ width: 34 }} />
         </View>
 
+        {/* ===== نفس بانر التنبيه الموجود بصوت المؤذن - يوضح إن التغييرات
+        بس مسودة لين تنحفظ صريحاً بزر "حفظ" بالأسفل ===== */}
+        {notifHasUnsavedChanges && (
+          <View style={[styles.unsavedBanner, { borderRadius: 14, marginBottom: 14, borderBottomWidth: 0 }]}>
+            <Ionicons name="alert-circle-outline" size={14} color={GOLD} />
+            <Text style={styles.unsavedBannerText}>
+              عندك تغييرات ما انحفظت، اضغط "حفظ" بالأسفل حتى تصير فعلية
+            </Text>
+          </View>
+        )}
+
         <Text style={styles.leadLabel}>نبّهني قبل الصلاة بـ</Text>
         <View style={styles.leadRow}>
           {LEAD_OPTIONS.map((min) => (
             <TouchableOpacity
               key={min}
-              style={[styles.leadChip, leadMinutes === min && styles.leadChipActive]}
-              onPress={() => setLeadMinutes(min)}
+              style={[styles.leadChip, pendingLeadMinutes === min && styles.leadChipActive]}
+              onPress={() => setPendingLeadMinutes(min)}
             >
-              <Text style={[styles.leadChipText, leadMinutes === min && styles.leadChipTextActive]}>
+              <Text style={[styles.leadChipText, pendingLeadMinutes === min && styles.leadChipTextActive]}>
                 {toArabicDigits(min)} د
               </Text>
             </TouchableOpacity>
@@ -700,8 +821,8 @@ export default function PrayerTimesScreen() {
             >
               <Text style={styles.notifRowTitle}>{p.title}</Text>
               <Switch
-                value={notifSettings[p.key]}
-                onValueChange={(v) => setNotifSettings((prev) => ({ ...prev, [p.key]: v }))}
+                value={pendingNotifSettings[p.key]}
+                onValueChange={(v) => setPendingNotifSettings((prev) => ({ ...prev, [p.key]: v }))}
                 trackColor={{ false: 'rgba(255,255,255,0.15)', true: BLUE }}
                 thumbColor="#fff"
               />
@@ -710,9 +831,26 @@ export default function PrayerTimesScreen() {
         </View>
 
         <Text style={styles.notifHint}>
-          الإشعارات تنجدول تلقائياً وتوصلك حتى لو التطبيق مسكر، وتتحدث كل ما تغيّر مدة التنبيه
-          أو تفعّل/تعطّل صلاة معينة.
+          الإشعارات تنجدول تلقائياً وتوصلك حتى لو التطبيق مسكر، وتتحدث كل ما تحفظ تغيير بمدة
+          التنبيه أو تفعيل/تعطيل صلاة معينة.
         </Text>
+
+        {/* ===== زر الحفظ الصريح + إلغاء - بنفس نمط شاشة صوت المؤذن تماماً ===== */}
+        <View style={styles.voiceSaveRow}>
+          <TouchableOpacity
+            style={[styles.confirmLocationBtn, { flex: 1 }]}
+            onPress={saveNotifChanges}
+          >
+            <Ionicons name="checkmark-circle" size={16} color="#0d1f2d" />
+            <Text style={styles.retryBtnText}>  حفظ</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.cancelBtn, { flex: 1 }]}
+            onPress={discardNotifChangesAndClose}
+          >
+            <Text style={styles.cancelBtnText}>إلغاء</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -821,7 +959,7 @@ export default function PrayerTimesScreen() {
           <View style={styles.centerBox}>
             <Ionicons name="alert-circle-outline" size={40} color="#f87171" />
             <Text style={styles.errorText}>{errorMsg}</Text>
-            <TouchableOpacity style={styles.retryBtn} onPress={fetchPrayerTimes}>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => fetchPrayerTimes(true)}>
               <Text style={styles.retryBtnText}>إعادة المحاولة (الموقع)</Text>
             </TouchableOpacity>
           </View>
@@ -895,7 +1033,10 @@ export default function PrayerTimesScreen() {
         <Text style={styles.sectionLabel}>صوت المؤذن</Text>
         <TouchableOpacity
           style={styles.selectorBox}
-          onPress={() => setShowVoicePicker(!showVoicePicker)}
+          onPress={() => {
+            if (!showVoicePicker) setPendingVoice(selectedVoice); // نبدأ المسودة من الاختيار المحفوظ فعلياً
+            setShowVoicePicker(!showVoicePicker);
+          }}
           activeOpacity={0.75}
         >
           <Ionicons name="volume-high" size={20} color={BLUE} />
@@ -905,17 +1046,30 @@ export default function PrayerTimesScreen() {
 
         {showVoicePicker && (
           <View style={styles.voiceList}>
+            {/* ===== الاختيار بالأسفل يغيّر مسودة الصوت (pendingVoice) بس، ومو
+            الصوت الفعلي المستخدم بالأذان - لازم تضغط "حفظ الاختيار" تحت حتى
+            ينحفظ فعلياً. هذا يخليك تتصفح وتعاين براحتك بدون خوف تغيّر الصوت
+            الحالي بالغلط ===== */}
+            {pendingVoice !== selectedVoice && (
+              <View style={styles.unsavedBanner}>
+                <Ionicons name="alert-circle-outline" size={14} color={GOLD} />
+                <Text style={styles.unsavedBannerText}>
+                  اخترت صوت جديد، اضغط "حفظ الاختيار" تحت حتى يصير هو صوت الأذان
+                </Text>
+              </View>
+            )}
+
             {/* ===== الأصوات الجاهزة (استخدام بسيط بضغطة وحدة) ===== */}
             {MUEZZIN_VOICES.map((voice, index) => (
               <View key={voice.id} style={[styles.voiceRow, styles.rowBorder]}>
                 <TouchableOpacity
                   style={styles.voiceRowMain}
-                  onPress={() => { setSelectedVoice(voice.id); setShowVoicePicker(false); }}
+                  onPress={() => setPendingVoice(voice.id)}
                 >
                   <Ionicons
-                    name={selectedVoice === voice.id ? 'radio-button-on' : 'radio-button-off'}
+                    name={pendingVoice === voice.id ? 'radio-button-on' : 'radio-button-off'}
                     size={18}
-                    color={selectedVoice === voice.id ? BLUE : C.muted}
+                    color={pendingVoice === voice.id ? BLUE : C.muted}
                   />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.voiceRowText}>{voice.flag} {voice.label}</Text>
@@ -952,14 +1106,13 @@ export default function PrayerTimesScreen() {
                         Alert.alert('استورد الصوت أول', 'اضغط زر الاستيراد وحط ملف الصوت قبل لا تختاره');
                         return;
                       }
-                      setSelectedVoice(voice.id);
-                      setShowVoicePicker(false);
+                      setPendingVoice(voice.id);
                     }}
                   >
                     <Ionicons
-                      name={selectedVoice === voice.id ? 'radio-button-on' : 'radio-button-off'}
+                      name={pendingVoice === voice.id ? 'radio-button-on' : 'radio-button-off'}
                       size={18}
-                      color={selectedVoice === voice.id ? BLUE : C.muted}
+                      color={pendingVoice === voice.id ? BLUE : C.muted}
                     />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.voiceRowText}>{voice.flag} {voice.label}</Text>
@@ -999,12 +1152,12 @@ export default function PrayerTimesScreen() {
               <View key={voice.id} style={[styles.voiceRow, styles.rowBorder]}>
                 <TouchableOpacity
                   style={styles.voiceRowMain}
-                  onPress={() => { setSelectedVoice(voice.id); setShowVoicePicker(false); }}
+                  onPress={() => setPendingVoice(voice.id)}
                 >
                   <Ionicons
-                    name={selectedVoice === voice.id ? 'radio-button-on' : 'radio-button-off'}
+                    name={pendingVoice === voice.id ? 'radio-button-on' : 'radio-button-off'}
                     size={18}
-                    color={selectedVoice === voice.id ? BLUE : C.muted}
+                    color={pendingVoice === voice.id ? BLUE : C.muted}
                   />
                   <Text style={styles.voiceRowText}>{voice.label}</Text>
                 </TouchableOpacity>
@@ -1031,6 +1184,32 @@ export default function PrayerTimesScreen() {
               <Ionicons name="add-circle-outline" size={20} color={BLUE} />
               <Text style={styles.addCustomText}>إضافة صوت خاص</Text>
             </TouchableOpacity>
+
+            {/* ===== زر الحفظ الصريح - هذا هو اللي يثبّت المسودة كصوت الأذان
+            الفعلي (يكتبه بـ AsyncStorage عبر selectedVoice) ويسكر القائمة،
+            مع زر إلغاء جنبه يرجّع المسودة لآخر صوت محفوظ بدون حفظ ===== */}
+            <View style={styles.voiceSaveRow}>
+              <TouchableOpacity
+                style={[styles.confirmLocationBtn, { flex: 1 }]}
+                onPress={() => {
+                  setSelectedVoice(pendingVoice);
+                  setShowVoicePicker(false);
+                  Alert.alert('تم الحفظ', 'انحفظ صوت المؤذن وراح يُستخدم بالأذان القادم');
+                }}
+              >
+                <Ionicons name="checkmark-circle" size={16} color="#0d1f2d" />
+                <Text style={styles.retryBtnText}>  حفظ الاختيار</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.cancelBtn, { flex: 1 }]}
+                onPress={() => {
+                  setPendingVoice(selectedVoice);
+                  setShowVoicePicker(false);
+                }}
+              >
+                <Text style={styles.cancelBtnText}>إلغاء</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -1038,7 +1217,11 @@ export default function PrayerTimesScreen() {
         <Text style={styles.sectionLabel}>التنبيهات</Text>
         <TouchableOpacity
           style={styles.selectorBox}
-          onPress={() => setShowNotifModal(true)}
+          onPress={() => {
+            setPendingLeadMinutes(leadMinutes);
+            setPendingNotifSettings(notifSettings);
+            setShowNotifModal(true);
+          }}
           activeOpacity={0.75}
         >
           <Ionicons name="notifications" size={20} color={BLUE} />
@@ -1051,7 +1234,7 @@ export default function PrayerTimesScreen() {
       <Modal
         visible={showNotifModal}
         animationType="slide"
-        onRequestClose={() => setShowNotifModal(false)}
+        onRequestClose={discardNotifChangesAndClose}
       >
         {withAppBackground(notifModalContent)}
       </Modal>
@@ -1222,7 +1405,9 @@ const styles = StyleSheet.create({
     backgroundColor: GOLD,
     paddingVertical: 12,
     borderRadius: 12,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 16,
   },
 
@@ -1354,6 +1539,22 @@ const styles = StyleSheet.create({
   },
   selectorText: { color: C.white, fontSize: 14, fontWeight: '600', flex: 1, textAlign: 'right' },
 
+  unsavedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: `rgba(${NEON_RGB},0.08)`,
+  },
+  unsavedBannerText: { color: GOLD, fontSize: 11.5, fontWeight: '600', flex: 1, textAlign: 'right' },
+  voiceSaveRow: {
+    flexDirection: 'row',
+    gap: 10,
+    padding: 14,
+  },
   voiceList: {
     backgroundColor: C.glass,
     borderRadius: 16,
