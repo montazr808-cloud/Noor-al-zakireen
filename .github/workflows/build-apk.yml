@@ -1,50 +1,33 @@
 name: Build Android APK
 
-# يشتغل يدوياً من تبويب Actions بالمستودع (زر "Run workflow")
-# وتگدر تفعّل تشغيله التلقائي بكل push لو تريد (شوف التعليق بالأسفل)
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
+  push:
+    branches:
+      - main
 
 jobs:
   build:
+    name: Build APK with EAS
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Setup JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+          node-version: 20
+          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Expo prebuild (Android)
-        run: npx expo prebuild --platform android --clean
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli@latest
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x android/gradlew
-
-      - name: Build release APK
-        working-directory: android
-        run: ./gradlew assembleRelease --stacktrace
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+      - name: Build Android APK
+        run: eas build --platform android --profile preview --clear-cache --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
