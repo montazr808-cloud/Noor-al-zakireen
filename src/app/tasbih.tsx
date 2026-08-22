@@ -29,11 +29,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle as SvgCircle } from 'react-native-svg';
 
 import GlassHamburgerMenu from '@/components/GlassHamburgerMenu';
-import LogoIntroModal from '@/components/LogoIntroModal';
 import PhoneFrameWrapper from '@/components/PhoneFrameWrapper';
 import { useThemeContext } from '@/contexts/theme-contexts';
 import { getSelectedBackground } from '@/utils/backgroundSettings';
 import { getHijriParts, getOccasion } from '@/utils/hijriOccasions';
+import { useHijriOffsetSync } from '@/utils/hijriSync';
 
 // ===== باليت ثابتة =====
 // خط الآيات القرآنية - "خط عثماني" حقيقي محتاج ملف خط فعلي (متوفر مجاناً مثل
@@ -735,6 +735,12 @@ export default function TasbihScreen() {
   // الحقيقي وراء تراكب الساعة/الشبكة فوق الهيدر بأجهزة أندرويد تحديداً
   const insets = useSafeAreaInsets();
 
+  // ⚠️ إصلاح التاريخ الهجري المتأخر/المتقدم يوم: يخلي الشاشة تعيد الرسم
+  // تلقائياً بلحظة ما توصل مزامنة تقويم النجف الحقيقية (نفس مصدر حقيبة
+  // المؤمن) بالخلفية - بدونه كان التاريخ يضل عالق على القيمة غير المصححة
+  // طول الجلسة (شوف التفصيل الكامل بتعليق hijriSync.ts)
+  useHijriOffsetSync();
+
   const isTablet  = width >= 700;
   const isDesktop = width >= 1024;
   const circleSize = isDesktop ? 300 : isTablet ? 280 : 220;
@@ -755,13 +761,6 @@ export default function TasbihScreen() {
   );
   const [activeTab,   setActiveTab]   = useState(0);
   const [moreOpen,    setMoreOpen]    = useState(false);
-  const [showLogoIntro, setShowLogoIntro] = useState(false);
-  // يتحول true مرة وحدة بس (أول ضغطة على الشعار) وما يرجع أبداً false - هذا
-  // يمنع تحميل مشغّل الفيديو (useVideoPlayer) فور فتح التطبيق، ويخليه يتحمّل
-  // بس أول مرة المستخدم يضغط فعلياً على الشعار. بدون هذا، المكوّن كان
-  // يتحمّل مع الشاشة الرئيسية مباشرة حتى لو مخفي - وهذا سبب كراش السبلاش
-  // القديم بالضبط (تحميل مكتبة فيديو بأخطر لحظة: فتح التطبيق)
-  const [logoIntroMounted, setLogoIntroMounted] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [lastWord,     setLastWord]   = useState('');
   const [verse] = useState(getTodayVerse());
@@ -1876,12 +1875,12 @@ export default function TasbihScreen() {
 
           {/* ===== الهيدر (الشعار + التاريخ + الصوت والمنيو، كلهم بنفس المستوى) ===== */}
           <View style={styles.header}>
-            {/* شعار التطبيق الحقيقي - الملف بمسار src/assets/logo.png - صار قابل
-                للضغط: يفتح فيديو تعريفي قصير ثم واجهة "حول التطبيق" */}
+            {/* شعار التطبيق الحقيقي - الملف بمسار src/assets/logo.png - يودي
+                مباشرة لواجهة "حول التطبيق" (تم حذف الفيديو التعريفي بطلب صريح) */}
             <TouchableOpacity
               style={styles.logoBadge}
               activeOpacity={0.75}
-              onPress={() => { setLogoIntroMounted(true); setShowLogoIntro(true); }}
+              onPress={() => router.push('/settings/about' as any)}
             >
               <Image
                 source={require('../assets/logo.png')}
@@ -1925,10 +1924,6 @@ export default function TasbihScreen() {
               <GlassHamburgerMenu />
             </View>
           </View>
-
-          {logoIntroMounted && (
-            <LogoIntroModal visible={showLogoIntro} onClose={() => setShowLogoIntro(false)} />
-          )}
 
           <View style={styles.mainLayout}>
             <View style={styles.leftPanel}>

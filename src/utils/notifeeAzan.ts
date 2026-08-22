@@ -59,6 +59,43 @@ async function ensureChannel() {
   });
 }
 
+// ===== فحص صلاحية "التنبيهات والمنبهات الدقيقة" (Exact Alarm) =====
+// هذي صلاحية منفصلة تماماً عن صلاحية الإشعارات العادية (اللي تطلب من
+// prayer-times.tsx). من أندرويد 12 وطالع، alarmManager:{allowWhileIdle:true}
+// (اللي نستخدمه بالجدولة تحت) يحتاجها حتى يوصل الأذان بالضبط بوقته - وبدونها
+// أندرويد يرجع الجدولة "غير دقيقة" بصمت (بدون أي خطأ بالكود) ويأجل التنبيه
+// حسب مزاجه (وضع توفير البطارية، Doze، ...). هذا سبب شائع لِـ"يوصل أحياناً
+// بوقته وأحياناً متأخر بدقايق" حتى لو باقي الكود صحيح 100%.
+// ملاحظة: التصريح موجود بـ app.json (SCHEDULE_EXACT_ALARM/USE_EXACT_ALARM)
+// وهذا شرط لازم بس مو كافي - أندرويد 13+ يحتاج المستخدم يفعّلها يدوياً من
+// شاشة نظام منفصلة، هذا اللي تتحقق منه وتفتحه هذي الدالة.
+export async function getExactAlarmPermissionStatus(): Promise<'granted' | 'denied' | 'unsupported'> {
+  if (Platform.OS !== 'android') return 'unsupported';
+  try {
+    const notifee = getNotifee();
+    const { AndroidNotificationSetting } = getNotifeeTypes();
+    const settings = await notifee.getNotificationSettings();
+    const alarmSetting = (settings as any)?.android?.alarm;
+    if (alarmSetting === AndroidNotificationSetting.ENABLED) return 'granted';
+    if (alarmSetting === AndroidNotificationSetting.NOT_SUPPORTED) return 'unsupported'; // أندرويد أقدم من 12 - ما يحتاجها أصلاً
+    return 'denied';
+  } catch {
+    // لو فشل الفحص لأي سبب (نسخة قديمة من notifee مثلاً)، ما نوقف التطبيق
+    // ونفترض إنها متاحة حتى ما نزعج المستخدم بتحذير غير مؤكد
+    return 'granted';
+  }
+}
+
+// يفتح شاشة النظام المخصصة لهذي الصلاحية تحديداً (مو إعدادات التطبيق العامة)
+export async function openExactAlarmSettings(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    await getNotifee().openAlarmPermissionSettings();
+  } catch {
+    // تجاهل - بعض الأجهزة/النسخ ما تدعم فتحها مباشرة
+  }
+}
+
 // ===== دالة الـforeground service - هذا هو المكان اللي فعلياً يشغل الصوت =====
 // notifee يستدعيها تلقائياً كل ما يطلع تنبيه بخاصية asForegroundService: true.
 // المهم: نرجع Promise ما ينحل إلا بعد ما الصوت يخلص أو يوصل أمر إيقاف - طول
@@ -206,7 +243,16 @@ export async function scheduleAzanNotifications(
     const [h, m] = timeStr.split(':').map(Number);
     const fireDate = new Date();
     fireDate.setHours(h, m, 0, 0);
-    if (fireDate.getTime() <= now) continue; // فاتت اليوم - تنجدول بكرة بالتحديث الجاي
+    if (fireDate.getTime() <= now) {
+      // ⚠️ إصلاح: قبل، هذا السطر كان "continue" (يلغي الصلاة نهائياً من الجدولة
+      // إذا فات وقتها اليوم) - وبما إن هذي الدالة تنعاد بس لما يفتح المستخدم
+      // التطبيق، أي صلاة عادةً يفتح التطبيق بعدها (مثلاً الظهر) كانت تنحذف من
+      // الجدولة كل يوم بنفس الطريقة، فما توصل أبداً. الحل: نجدولها بكرة
+      // بنفس الوقت بدل الإلغاء - وبما إن الدالة تنعاد وتحدّث الوقت كل ما
+      // يفتح التطبيق، الفرق البسيط (دقيقة/دقيقتين) بين وقت اليوم ووقت بكرة
+      // الفلكي الفعلي ينصحح لحاله بأول فتحة جاية للتطبيق
+      fireDate.setDate(fireDate.getDate() + 1);
+    }
 
     try {
       const id = await notifee.createTriggerNotification(
@@ -219,11 +265,26 @@ export async function scheduleAzanNotifications(
             ongoing: true,
             visibility: AndroidVisibility.PUBLIC,
             category: AndroidCategory.ALARM,
+            // ⚠️ إصلاح: هذا الاشعار كان الوحيد اللي ما محدد له smallIcon/largeIcon
+            // بشكل صريح، فـnotifee كان يرجع تلقائياً لأيقونة التطبيق الملونة
+            // الكبيرة كصورة الاشعار (مختلفة عن شكل باقي الاشعارات النظيف)
+            smallIcon: 'ic_notification',
+            largeIcon: 'ic_notification_large',
             pressAction: { id: 'default' },
             actions: [{ title: 'إيقاف الأذان', pressAction: { id: STOP_ACTION_ID } }],
           },
         },
-        { type: TriggerType.TIMESTAMP, timestamp: fireDate.getTime() }
+        {
+          type: TriggerType.TIMESTAMP,
+          timestamp: fireDate.getTime(),
+          // ⚠️ إصلاح جوهري (توحيد ثبات الإشعارات بكل الهواتف): بدون alarmManager
+          // صريح، notifee يجدول التنبيه كـ"غير دقيق" على أندرويد - يعني النظام
+          // (خصوصاً هواوي/شاومي وبدرجة أقل سامسونج) يأجله أو يجمعه حسب وضع توفير
+          // البطارية (Doze)، وهذا بالضبط سبب "يشتغل بهاتف وما يشتغل بهاتف ثاني".
+          // allowWhileIdle:true يجبر النظام يوصل التنبيه بالضبط بوقته حتى لو
+          // الجهاز بوضع نوم عميق - هذا الأهم إشعار بالتطبيق (الأذان نفسه).
+          alarmManager: { allowWhileIdle: true },
+        }
       );
       ids.push(id);
     } catch {

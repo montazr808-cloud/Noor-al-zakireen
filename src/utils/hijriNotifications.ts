@@ -4,8 +4,12 @@
 // عبر notifee حتى نگدر نتحكم بالشكل (لون، أيقونة كبيرة، colorized) بدل
 // الشكل الافتراضي المحدود لـ expo-notifications. الدوال المصدّرة وتوقيعاتها
 // نفسها بالضبط عشان ما ينكسر أي استدعاء بملفات ثانية.
+//
+// ⚠️ إصلاح (٢٠٢٦-٠٨-٢١): طلب الصلاحية تحول من expo-notifications لـ
+// notifee.requestPermission() مباشرة - نفس السبب بالضبط الموضح بملف
+// notificationScheduler.ts (نظامي الصلاحية طلعوا مو متطابقين دايماً على كل
+// الأجهزة، وهذا كان يقطع جدولة المناسبات كلياً وبصمت).
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import {
@@ -98,10 +102,14 @@ export async function setHijriNotifPrefs(prefs: HijriNotifPrefs): Promise<void> 
 }
 
 export async function requestHijriNotificationPermissions(): Promise<boolean> {
-  const current = await Notifications.getPermissionsAsync();
-  if (current.status === 'granted') return true;
-  const requested = await Notifications.requestPermissionsAsync();
-  return requested.status === 'granted';
+  try {
+    const notifee = getNotifee();
+    const { AuthorizationStatus } = getNotifeeTypes();
+    const settings = await notifee.requestPermission();
+    return settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+  } catch {
+    return false;
+  }
 }
 
 function buildEventsList(daysAhead: number): HijriEvent[] {
@@ -224,7 +232,12 @@ export async function scheduleHijriNotifications(prefs: HijriNotifPrefs): Promis
             sound: 'default',
           },
         },
-        { type: TriggerType.TIMESTAMP, timestamp: ev.date.getTime() }
+        {
+          type: TriggerType.TIMESTAMP,
+          timestamp: ev.date.getTime(),
+          // ⚠️ إصلاح ثبات الإشعارات بكل الهواتف - نفس السبب بباقي ملفات الجدولة
+          alarmManager: { allowWhileIdle: true },
+        }
       );
       ids.push(id);
     } catch {

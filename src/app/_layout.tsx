@@ -5,7 +5,6 @@ import { BlurView } from 'expo-blur';
 import { useFonts } from 'expo-font';
 import * as Notifications from 'expo-notifications';
 import { router, Tabs } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { ColorValue, LogBox, Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,7 +13,10 @@ LogBox.ignoreAllLogs(true);
 
 registerBackgroundNotificationHandlers();
 
-SplashScreen.preventAutoHideAsync().catch(() => {});
+// ⚠️ تم حذف السبلاش سكرين عمداً (طلب صريح): ما نستدعي preventAutoHideAsync
+// ولا نتحكم يدوياً بإخفاء الشاشة الأصلية - نتركها تختفي تلقائياً بأسرع وقت
+// ممكن (افتراضي Expo/React Navigation) بمجرد ما أول إطار يترسم، بدل ما ننتظر
+// تحميل الخطوط. يعني التطبيق يفتح مباشرة بدون أي شاشة انتقالية مخصصة.
 
 function GlassTabBarBackground() {
   return (
@@ -53,7 +55,7 @@ function GuideIcon({
 }
 
 export default function Layout() {
-  const [fontsLoaded, fontError] = useFonts({
+  const [, fontError] = useFonts({
     'Amiri-Regular': require('../assets/fonts/Amiri-Regular.ttf'),
     'Amiri-Bold': require('../assets/fonts/Amiri-Bold.ttf'),
     UthmanicHafs: require('../assets/fonts/UthmanicHafs.ttf'),
@@ -64,12 +66,6 @@ export default function Layout() {
       console.error('[Layout] فشل تحميل الخطوط:', fontError);
     }
   }, [fontError]);
-
-  useEffect(() => {
-    if (fontsLoaded || fontError) {
-      SplashScreen.hideAsync().catch(() => {});
-    }
-  }, [fontsLoaded, fontError]);
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {

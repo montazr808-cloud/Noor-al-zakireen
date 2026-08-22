@@ -60,16 +60,29 @@ type QuranVerse = { id: number; text: string };
 type QuranSurah = { id: number; name: string; verses: QuranVerse[] };
 
 let cachedQuran: QuranSurah[] | null = null;
-function loadQuranData(): QuranSurah[] {
-  if (!cachedQuran) {
+let quranLoadFailed = false;
+function loadQuranData(): QuranSurah[] | null {
+  if (cachedQuran) return cachedQuran;
+  if (quranLoadFailed) return null; // جربنا قبل وفشل - ما نعيد نفس المحاولة كل آية
+  try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     cachedQuran = require('../assets/quran-full.json') as QuranSurah[];
+    return cachedQuran;
+  } catch (e) {
+    // ⚠️ إصلاح جوهري: هذا require كان بدون try/catch - لو صار أي خطأ هنا
+    // (مسار غلط، ملف تالف، إلخ)، الخطأ كان يهرب لأعلى من scheduleVerseNotifications
+    // بالكامل، يوصل لـ initializeAppNotifications بملف notifications.ts، ويقع
+    // بالـ catch الصامت هناك - يعني كل إشعارات الآيات تنقطع كلياً بدون أي أثر
+    // بالكونسول يوضح السبب. هسه أي فشل هنا يطبع بالكونسول بالضبط شنو صار.
+    quranLoadFailed = true;
+    console.error('[verseNotifications] فشل تحميل assets/quran-full.json:', e);
+    return null;
   }
-  return cachedQuran;
 }
 
 function resolveVerseText(ref: VerseRef): { surahName: string; text: string } | null {
   const data = loadQuranData();
+  if (!data) return null;
   const surah = data.find((s) => s.id === ref.surahNum);
   if (!surah) return null;
   const parts: string[] = [];
@@ -159,7 +172,12 @@ export async function scheduleVerseNotifications(times: PrayerTimesResult): Prom
           },
           ios: { sound: 'default' },
         },
-        { type: TriggerType.TIMESTAMP, timestamp: fireDate.getTime() }
+        {
+          type: TriggerType.TIMESTAMP,
+          timestamp: fireDate.getTime(),
+          // ⚠️ إصلاح ثبات الإشعارات بكل الهواتف - نفس السبب بباقي ملفات الجدولة
+          alarmManager: { allowWhileIdle: true },
+        }
       );
       ids.push(id);
       indexes[prayer] = (idx + 1) % refs.length; // نقدّم الدور بس لو الجدولة نجحت فعلاً

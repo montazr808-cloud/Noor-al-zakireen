@@ -169,7 +169,14 @@ export async function scheduleNextPrayerNotifications(times: PrayerTimesInput): 
     const [h, m] = times[currentKey].split(':').map(Number);
     const fireDate = new Date();
     fireDate.setHours(h, m, 0, 0);
-    if (fireDate.getTime() <= now) continue; // فاتت اليوم - تنجدول بكرة بالتحديث الجاي (نفس مبدأ notifeeAzan.ts)
+    if (fireDate.getTime() <= now) {
+      // ⚠️ نفس إصلاح notifeeAzan.ts: نجدول بكرة بدل ما نلغي هالانتقال كلياً.
+      // ملاحظة: النص المعروض (وقت "الصلاة التالية") بهذي الحالة يضل يعتمد
+      // على times المرسلة اليوم، يعني ممكن يبين وقت أقدم بدقيقة/دقيقتين عن
+      // الوقت الفلكي الحقيقي لبكرة - فرق بسيط ينصحح لحاله بأول فتحة تطبيق
+      // جاية (لما تنجدد times ويعاد استدعاء هذي الدالة من جديد)
+      fireDate.setDate(fireDate.getDate() + 1);
+    }
 
     const { title, body } = buildNotificationContent(nextKey, times[nextKey]);
 
@@ -194,7 +201,12 @@ export async function scheduleNextPrayerNotifications(times: PrayerTimesInput): 
             ],
           },
         },
-        { type: TriggerType.TIMESTAMP, timestamp: fireDate.getTime() }
+        {
+          type: TriggerType.TIMESTAMP,
+          timestamp: fireDate.getTime(),
+          // ⚠️ إصلاح ثبات الإشعارات بكل الهواتف - نفس السبب بباقي ملفات الجدولة
+          alarmManager: { allowWhileIdle: true },
+        }
       );
       ids.push(id);
     } catch {

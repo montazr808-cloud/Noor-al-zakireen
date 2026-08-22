@@ -14,6 +14,7 @@
 // بلا حالة) وما يستاهل التعقيد البديل.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEffect, useState } from 'react';
 
 const OFFSET_KEY = '@hijri_najaf_offset';
 const OFFSET_DATE_KEY = '@hijri_najaf_offset_date'; // آخر يوم (yyyy-m-d محلي) صارت فيه مزامنة ناجحة
@@ -92,13 +93,51 @@ function todayKey(): string {
 let cachedOffset = 0;
 let loadedFromStorage = false;
 
+// ⚠️ إصلاح جوهري (كان التاريخ الهجري يبين متقدم/متأخر يوم عن حقيبة المؤمن
+// طول الجلسة رغم وجود مزامنة حقيقية شغالة): loadCachedOffset/syncNajafOffset
+// تصير بـ_layout.tsx داخل useEffect (بعد أول رسم للشاشة، بشكل غير متزامن).
+// getHijriParts تقرا cachedOffset مباشرة وقت كل استدعاء - فالمشكلة مو
+// بالحساب نفسه، المشكلة إن الشاشة توصل أول offset (صفر، غير مصحح) وقت أول
+// رسم، وبعدين لما تخلص المزامنة الحقيقية وتحدّث cachedOffset، ماكو أي شي
+// يخلي React يعيد رسم الشاشة - فالتاريخ يضل عالق على القيمة الغلط طول
+// الجلسة لحد ما يصير شي يفرض إعادة رسم.
+//
+// الحل: نظام تنبيه بسيط - أي شاشة تستخدم useHijriOffsetSync() تنعاد رسمها
+// تلقائياً بلحظة تحدّث cachedOffset فعلياً، فيتصحح التاريخ لحاله خلال ثانية
+// أو ثانيتين من فتح التطبيق، بدون أي تدخل من المستخدم.
+type OffsetListener = () => void;
+let offsetListeners: OffsetListener[] = [];
+function notifyOffsetListeners() {
+  offsetListeners.forEach((l) => l());
+}
+
+/**
+ * Hook - ينادى داخل أي مكوّن يعرض التاريخ الهجري (تسبيح.tsx، calendar.tsx).
+ * ما يرجع أي قيمة - بس يخلي المكوّن يعيد الرسم تلقائياً أول ما يتحدّث
+ * الأوفست الحقيقي، فتُعاد قراءة getHijriParts() بأحدث قيمة صحيحة تلقائياً.
+ */
+export function useHijriOffsetSync(): void {
+  const [, forceRerender] = useState(0);
+  useEffect(() => {
+    const listener = () => forceRerender((n) => n + 1);
+    offsetListeners.push(listener);
+    return () => {
+      offsetListeners = offsetListeners.filter((l) => l !== listener);
+    };
+  }, []);
+}
+
 // يحمّل آخر offset محفوظ من AsyncStorage - يستدعى مرة وحدة عند بداية التطبيق
 // (قبل أول render إذا ممكن) حتى ما تظهر الشاشة أول شي بالحساب المحلي البحت ثم
 // "تقفز" بعد لحظة إذا كان عندنا offset محفوظ من قبل
 export async function loadCachedOffset(): Promise<number> {
   try {
     const v = await AsyncStorage.getItem(OFFSET_KEY);
-    cachedOffset = v ? parseInt(v, 10) : 0;
+    const next = v ? parseInt(v, 10) : 0;
+    if (next !== cachedOffset) {
+      cachedOffset = next;
+      notifyOffsetListeners();
+    }
   } catch {
     cachedOffset = 0;
   }
@@ -142,7 +181,10 @@ export async function syncNajafOffset(): Promise<boolean> {
     // الـ API، نتجاهله ونحافظ على آخر offset سليم بدل تطبيق رقم غلط
     if (Math.abs(offset) > 2) return false;
 
-    cachedOffset = offset;
+    if (offset !== cachedOffset) {
+      cachedOffset = offset;
+      notifyOffsetListeners();
+    }
     loadedFromStorage = true;
     await AsyncStorage.setItem(OFFSET_KEY, String(offset));
     await AsyncStorage.setItem(OFFSET_DATE_KEY, todayKey());

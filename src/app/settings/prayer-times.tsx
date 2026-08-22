@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   ImageBackground,
   Linking,
   Modal,
@@ -37,7 +38,7 @@ import {
   SELECTED_VOICE_KEY,
   type CustomVoice,
 } from '@/utils/muezzinVoices';
-import { scheduleAzanNotifications } from '@/utils/notifeeAzan';
+import { getExactAlarmPermissionStatus, openExactAlarmSettings, scheduleAzanNotifications } from '@/utils/notifeeAzan';
 import { scheduleAthkarNotifications } from '@/utils/notificationScheduler';
 import { geocodeAddress, getPrayerTimes } from '@/utils/prayerCalc';
 
@@ -213,6 +214,31 @@ export default function PrayerTimesScreen() {
   const [times, setTimes] = useState<PrayerTimes | null>(null);
   const [cityName, setCityName] = useState<string>('');
 
+  // ===== توست زجاجي متناسق مع تصميم التطبيق - بديل لنوافذ Alert البيضاء
+  // الافتراضية بكل رسائل هذي الشاشة (حفظ، خطأ، تنبيه ناقص) =====
+  type ToastKind = 'success' | 'error' | 'warning';
+  const [toast, setToast] = useState<{ title: string; message: string; kind: ToastKind } | null>(null);
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = (title: string, message: string, kind: ToastKind = 'success') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ title, message, kind });
+    toastAnim.setValue(0);
+    Animated.timing(toastAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    toastTimerRef.current = setTimeout(() => {
+      Animated.timing(toastAnim, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => {
+        setToast(null);
+      });
+    }, 2800);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
   // ===== ١. اختيار الموقع حسب الدولة/المدينة (بديل لو تعطّل تحديد الموقع) =====
   const [showCitySelector, setShowCitySelector] = useState(false);
   const [countrySearchText, setCountrySearchText] = useState('');
@@ -232,6 +258,10 @@ export default function PrayerTimesScreen() {
   // ما يتغيّر الصوت الفعلي المستخدم بالأذان قبل ما تأكد =====
   const [pendingVoice, setPendingVoice] = useState<string>(DEFAULT_VOICE_ID);
   const soundRef = useRef<AudioPlayer | null>(null);
+  // حتى ما نزعج المستخدم بنفس التنبيه كل ما تنعاد جدولة الإشعارات (كل تغيير
+  // بالإعدادات يعيد استدعاء scheduleNotificationsForTimes) - نعرضه مرة وحدة
+  // بس بكل جلسة فتح للشاشة
+  const alarmPermissionPromptShownRef = useRef(false);
 
   // ===== ٢ب. أصوات إضافية مستوردة يدوياً + أصوات خاصة أضافها المستخدم =====
   const [additionalVoiceFiles, setAdditionalVoiceFiles] = useState<Record<string, string>>({});
@@ -405,10 +435,7 @@ export default function PrayerTimesScreen() {
       finalStatus = status;
     }
     if (finalStatus !== 'granted') {
-      Alert.alert(
-        'الإشعارات غير مفعّلة',
-        'لازم تسمح بالإشعارات من إعدادات الجهاز عشان توصلك تنبيهات الصلاة'
-      );
+      showToast('الإشعارات غير مفعّلة', 'لازم تسمح بالإشعارات من إعدادات الجهاز عشان توصلك تنبيهات الصلاة', 'warning');
       return false;
     }
     if (Platform.OS === 'android') {
@@ -497,6 +524,24 @@ export default function PrayerTimesScreen() {
         );
       } catch {
         // ما نوقف باقي الشاشة لأجل هذا - تنبيه "قربت الصلاة" فوگ ضل شغال بأي حال
+      }
+
+      // ===== فحص صلاحية "التنبيهات والمنبهات الدقيقة" - لو مقفلة، أذان الصلاة
+      // ممكن يوصل متأخر بدقايق أو يتجمع مع إشعارات ثانية بدل ما يوصل بالضبط
+      // بوقته. نعرض تنبيه واضح مرة وحدة بالجلسة مع زر يفتح شاشة التفعيل مباشرة =====
+      if (!alarmPermissionPromptShownRef.current) {
+        const alarmStatus = await getExactAlarmPermissionStatus();
+        if (alarmStatus === 'denied') {
+          alarmPermissionPromptShownRef.current = true;
+          Alert.alert(
+            'صلاحية إضافية مطلوبة لدقة الأذان',
+            'حتى يوصلك الأذان بالضبط بوقته (مو متأخر بدقايق)، فعّل صلاحية "التنبيهات والمنبهات" لتطبيق نور الذاكرين من إعدادات الجهاز.',
+            [
+              { text: 'لاحقاً', style: 'cancel' },
+              { text: 'فتح الإعدادات', onPress: () => openExactAlarmSettings() },
+            ]
+          );
+        }
       }
     }
   };
@@ -627,7 +672,7 @@ export default function PrayerTimesScreen() {
   const openYoutubeSearch = (label: string) => {
     const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(label + ' أذان')}`;
     Linking.openURL(url).catch(() => {
-      Alert.alert('خطأ', 'تعذّر فتح يوتيوب');
+      showToast('خطأ', 'تعذّر فتح يوتيوب', 'error');
     });
   };
 
@@ -644,9 +689,9 @@ export default function PrayerTimesScreen() {
       await FileSystem.copyAsync({ from: asset.uri, to: destPath });
 
       setAdditionalVoiceFiles((prev) => ({ ...prev, [voiceId]: destPath }));
-      Alert.alert('تم', 'انربط الصوت بنجاح، تگدر تعاينه الحين');
+      showToast('تم', 'انربط الصوت بنجاح، تگدر تعاينه الحين', 'success');
     } catch {
-      Alert.alert('خطأ', 'تعذّر استيراد الملف');
+      showToast('خطأ', 'تعذّر استيراد الملف', 'error');
     }
   };
 
@@ -658,14 +703,14 @@ export default function PrayerTimesScreen() {
       setNewCustomUri(result.assets[0].uri);
       setNewCustomFileName(result.assets[0].name || 'ملف صوتي');
     } catch {
-      Alert.alert('خطأ', 'تعذّر اختيار الملف');
+      showToast('خطأ', 'تعذّر اختيار الملف', 'error');
     }
   };
 
   // ===== حفظ الصوت المخصص الجديد بعد اختيار الاسم والملف =====
   const saveCustomVoice = async () => {
     if (!newCustomName.trim() || !newCustomUri) {
-      Alert.alert('ناقص شي', 'لازم تكتب اسم وتختار ملف صوتي قبل الحفظ');
+      showToast('ناقص شي', 'لازم تكتب اسم وتختار ملف صوتي قبل الحفظ', 'warning');
       return;
     }
     try {
@@ -681,14 +726,14 @@ export default function PrayerTimesScreen() {
       setNewCustomUri(null);
       setNewCustomFileName('');
     } catch {
-      Alert.alert('خطأ', 'تعذّر حفظ الصوت الجديد');
+      showToast('خطأ', 'تعذّر حفظ الصوت الجديد', 'error');
     }
   };
 
   // ===== معاينة أي صوت (أساسي / إضافي مستورد / مخصص) =====
   const previewVoice = async (playableUri: any, id: string, isNotReady: boolean) => {
     if (isNotReady) {
-      Alert.alert('غير مرتبط بعد', 'استورد ملف الصوت أول من زر "استيراد" حتى تگدر تعاينه');
+      showToast('غير مرتبط بعد', 'استورد ملف الصوت أول من زر "استيراد" حتى تگدر تعاينه', 'warning');
       return;
     }
     try {
@@ -707,7 +752,7 @@ player.addListener('playbackStatusUpdate', (status) => {
   }
 });
     } catch {
-      Alert.alert('خطأ', 'تعذّر تشغيل عينة الصوت');
+      showToast('خطأ', 'تعذّر تشغيل عينة الصوت', 'error');
       setPreviewingId(null);
     }
   };
@@ -772,7 +817,7 @@ player.addListener('playbackStatusUpdate', (status) => {
     setNotifSettings(pendingNotifSettings);
     setLeadMinutes(pendingLeadMinutes);
     setShowNotifModal(false);
-    Alert.alert('تم الحفظ', 'انحفظت إعدادات التنبيهات وراح تنجدول على أساسها');
+    showToast('تم الحفظ', 'انحفظت إعدادات التنبيهات وراح تنجدول على أساسها', 'success');
   };
 
   // ===== محتوى شاشة التنبيهات (تُعرض كصفحة منفصلة عبر Modal، بنفس خلفية التطبيق الزجاجية) =====
@@ -1103,7 +1148,7 @@ player.addListener('playbackStatusUpdate', (status) => {
                     style={styles.voiceRowMain}
                     onPress={() => {
                       if (!importedUri) {
-                        Alert.alert('استورد الصوت أول', 'اضغط زر الاستيراد وحط ملف الصوت قبل لا تختاره');
+                        showToast('استورد الصوت أول', 'اضغط زر الاستيراد وحط ملف الصوت قبل لا تختاره', 'warning');
                         return;
                       }
                       setPendingVoice(voice.id);
@@ -1194,7 +1239,7 @@ player.addListener('playbackStatusUpdate', (status) => {
                 onPress={() => {
                   setSelectedVoice(pendingVoice);
                   setShowVoicePicker(false);
-                  Alert.alert('تم الحفظ', 'انحفظ صوت المؤذن وراح يُستخدم بالأذان القادم');
+                  showToast('تم الحفظ', 'انحفظ صوت المؤذن وراح يُستخدم بالأذان القادم', 'success');
                 }}
               >
                 <Ionicons name="checkmark-circle" size={16} color="#0d1f2d" />
@@ -1293,6 +1338,45 @@ player.addListener('playbackStatusUpdate', (status) => {
 
   // يغلّف أي محتوى بنفس خلفية التطبيق (صورة أو لون) - يُستخدم للشاشة الرئيسية وشاشة التنبيهات
   function withAppBackground(node: ReactElement) {
+    const toastNode = toast && (
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.toastWrap,
+          {
+            opacity: toastAnim,
+            transform: [
+              { translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) },
+            ],
+          },
+        ]}
+      >
+        <View
+          style={[
+            styles.toastCard,
+            toast.kind === 'error' && styles.toastCardError,
+            toast.kind === 'warning' && styles.toastCardWarning,
+          ]}
+        >
+          <Ionicons
+            name={
+              toast.kind === 'error'
+                ? 'close-circle'
+                : toast.kind === 'warning'
+                ? 'alert-circle'
+                : 'checkmark-circle'
+            }
+            size={22}
+            color={toast.kind === 'error' ? '#F87171' : toast.kind === 'warning' ? '#FBBF24' : C.neon}
+          />
+          <View style={styles.toastTextWrap}>
+            <Text style={styles.toastTitle}>{toast.title}</Text>
+            <Text style={styles.toastMessage}>{toast.message}</Text>
+          </View>
+        </View>
+      </Animated.View>
+    );
+
     if (bgOption.image) {
       return (
         <View style={[styles.bgFill, { backgroundColor: bgOption.color }]}>
@@ -1304,11 +1388,17 @@ player.addListener('playbackStatusUpdate', (status) => {
           >
             <View style={[styles.bgOverlay, { opacity: bgOption.overlayOpacity }]} />
             {node}
+            {toastNode}
           </ImageBackground>
         </View>
       );
     }
-    return <View style={[styles.bgFill, { backgroundColor: bgOption.color }]}>{node}</View>;
+    return (
+      <View style={[styles.bgFill, { backgroundColor: bgOption.color }]}>
+        {node}
+        {toastNode}
+      </View>
+    );
   }
 
   return wrapInPhoneFrame(withAppBackground(screenContent));
@@ -1476,6 +1566,42 @@ const styles = StyleSheet.create({
     elevation: 6,
     marginBottom: 8,
   },
+
+  // ===== توست زجاجي - بديل نوافذ Alert البيضاء لكل رسائل هذي الشاشة =====
+  toastWrap: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 36,
+    alignItems: 'center',
+    zIndex: 999,
+  },
+  toastCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(13,20,28,0.92)',
+    borderWidth: 1,
+    borderColor: `rgba(${NEON_RGB},0.35)`,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+    elevation: 10,
+  },
+  toastCardError: {
+    borderColor: 'rgba(248,113,113,0.4)',
+  },
+  toastCardWarning: {
+    borderColor: 'rgba(251,191,36,0.4)',
+  },
+  toastTextWrap: { flex: 1 },
+  toastTitle: { color: C.white, fontWeight: '700', fontSize: 14, marginBottom: 2, textAlign: 'right' },
+  toastMessage: { color: C.muted, fontSize: 12.5, textAlign: 'right', lineHeight: 18 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

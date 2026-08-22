@@ -192,7 +192,20 @@ export default function PhoneWallpapersScreen() {
     // ⚠️ writeOnly=true: التطبيق يحتاج بس يضيف صور للمعرض، مو يقرأ صور المستخدم
     // الموجودة مسبقاً - هذا يطلب صلاحية أضيق (وأسهل موافقة) خصوصاً على أندرويد
     // ١٣+ حيث صلاحية القراءة الكاملة (READ_MEDIA_IMAGES) منفصلة وأصعب موافقة
-    const { status } = await MediaLibrary.requestPermissionsAsync(true);
+    //
+    // ⚠️ إصلاح: هذا الاستدعاء كان خارج أي try/catch - لو صار أي خطأ بلحظة طلب
+    // الصلاحية نفسها (مثلاً موديول native غير مربوط صح بعد تحديث)، الدالة كلها
+    // تنكسر بصمت تام: زر "حفظ" بس ما يسوي شي وما تطلع ولا رسالة خطأ للمستخدم -
+    // هذا كان يطابق تماماً بلاغ "الصور ما تنحفظ" بدون أي رسالة توضح السبب.
+    let status: string;
+    try {
+      const result = await MediaLibrary.requestPermissionsAsync(true);
+      status = result.status;
+    } catch (err) {
+      console.log('requestPermissionsAsync error:', err);
+      Alert.alert('خطأ بالصلاحية', describeError(err));
+      return;
+    }
     if (status !== 'granted') {
       Alert.alert('تنبيه', 'يرجى السماح بالوصول للصور');
       return;

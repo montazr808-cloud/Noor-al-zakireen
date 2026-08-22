@@ -11,13 +11,18 @@
 // بـ notificationEvents.ts للنوع الأول، وواحدة بـ app/_layout.tsx مباشرة
 // عبر Notifications.addNotificationResponseReceivedListener للنوع الثاني).
 // هسه توحد الكل تحت notifee ونقطة تسجيل الأحداث المركزية الوحيدة
-// (notificationEvents.ts) - استعمال expo-notifications ضل بس لطلب صلاحية
-// الإشعارات (getPermissionsAsync/requestPermissionsAsync)، نفس الأسلوب
-// المستخدم أصلاً بملف hijriNotifications.ts، لأن صلاحية أندرويد نظام واحد
-// مشترك بين المكتبتين فما داعي نطلبها مرتين بطريقتين مختلفتين.
+// (notificationEvents.ts).
+//
+// ⚠️ إصلاح إضافي (٢٠٢٦-٠٨-٢١): طلب الصلاحية نفسه كان لسه عبر
+// expo-notifications (getPermissionsAsync/requestPermissionsAsync) بافتراض
+// إنها نفس صلاحية أندرويد المشتركة مع notifee. عملياً طلع هذا يفسر بالضبط
+// ليش الأذان والصلاة القادمة (يستخدمون notifee مباشرة بدون هذا الفحص)
+// يوصلون طبيعي، بينما تذكيرات الأذكار/الأدعية (المقيدة بهذا الفحص) تنقطع
+// كلياً وترجع 0 بصمت - نظامي الصلاحية انطلع مو متطابقين دايماً على كل
+// الأجهزة رغم افتراض المشاركة. صار الفحص الآن عبر notifee.requestPermission()
+// مباشرة - نفس النظام المُثبت نجاحه بباقي أنواع الإشعارات.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import adiyahDataRaw from '@/data/adiyah-data.json';
@@ -59,10 +64,19 @@ async function ensureChannel() {
 // الصلاحية على مستوى نظام أندرويد، ما داعي نطلبها مرتين بطريقتين)
 async function requestNotifPermission(): Promise<boolean> {
   try {
-    const { status: existing } = await Notifications.getPermissionsAsync();
-    if (existing === 'granted') return true;
-    const { status } = await Notifications.requestPermissionsAsync();
-    return status === 'granted';
+    // ⚠️ إصلاح: كان هذا يتحقق عبر Notifications.getPermissionsAsync/
+    // requestPermissionsAsync من مكتبة expo-notifications - نظام صلاحيات
+    // منفصل تماماً عن notifee (اللي فعلياً يجدول كل الإشعارات هسه). خلط
+    // نظامين صلاحية مختلفين ممكن يصير بينهم تعارض/عدم تزامن على بعض
+    // الأجهزة (النظام الأول يرجع "مو ممنوح" رغم إن notifee فعلياً عنده
+    // صلاحية شغالة - وهذا بالضبط يفسر ليش الأذان والصلاة القادمة يوصلون
+    // طبيعي (notifee مباشرة، بدون هذا الفحص) بينما الأذكار/الأدعية تنقطع
+    // كلياً هنا وترجع 0 بصمت). التوحيد على صلاحية notifee نفسها يخلي كل
+    // أنواع الإشعارات تتحقق بنفس الطريقة بالضبط.
+    const notifee = getNotifee();
+    const { AuthorizationStatus } = getNotifeeTypes();
+    const settings = await notifee.requestPermission();
+    return settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
   } catch (e) {
     console.error('[athkar] فشل فحص/طلب صلاحية الإشعارات:', e);
     return false;
@@ -254,7 +268,14 @@ async function scheduleOne(
         },
         ios: { sound: 'default' },
       },
-      { type: TriggerType.TIMESTAMP, timestamp: fireDate.getTime() }
+      {
+        type: TriggerType.TIMESTAMP,
+        timestamp: fireDate.getTime(),
+        // ⚠️ إصلاح ثبات الإشعارات بكل الهواتف: بدون alarmManager صريح، أندرويد
+        // يعامل هذا كتنبيه "غير دقيق" ويأجله حسب وضع توفير البطارية (خصوصاً
+        // هواوي/شاومي) - هذا بالضبط سبب "يشتغل بهاتف وما ينطبق بهاتف ثاني".
+        alarmManager: { allowWhileIdle: true },
+      }
     );
   } catch (e) {
     console.error(`[athkar] فشلت جدولة "${title}":`, e);
