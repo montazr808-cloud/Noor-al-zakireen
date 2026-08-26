@@ -96,6 +96,32 @@ export async function openExactAlarmSettings(): Promise<void> {
   }
 }
 
+// ===== صلاحية "الظهور فوق التطبيقات الأخرى" (Display over other apps /
+// SYSTEM_ALERT_WINDOW) =====
+// هذي صلاحية "خاصة" بأندرويد (Special App Access) - نفس فئة صلاحية المنبه
+// الدقيق: معلنة بـ app.json (SYSTEM_ALERT_WINDOW)، بس ما تنطلب بمربع حوار
+// عادي وقت التشغيل، ولازم المستخدم يفعّلها يدوياً من شاشة نظام مخصصة.
+// ⚠️ محدودية حقيقية: أندرويد ما يعطي أي طريقة برمجية (بدون كتابة كود Native
+// إضافي خارج Expo) نتحقق فيها هل الصلاحية ممنوحة فعلاً أو لا (بعكس صلاحية
+// المنبه الدقيق اللي notifee توفر لها فحص جاهز). لهذا هذي الدالة تفتح شاشة
+// التفعيل مباشرة بس، بدون فحص مسبق - العرض يصير مرة وحدة بالجلسة بغض النظر
+// عن الحالة الفعلية.
+const ANDROID_PACKAGE_ID = 'com.anonymous.nooralzakireen'; // ⚠️ لازم يطابق app.json → expo.android.package بالضبط
+
+export async function openOverlayPermissionSettings(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const IntentLauncher = require('expo-intent-launcher');
+    await IntentLauncher.startActivityAsync(
+      IntentLauncher.ActivityAction.MANAGE_OVERLAY_PERMISSION_SETTINGS,
+      { data: `package:${ANDROID_PACKAGE_ID}` }
+    );
+  } catch (e) {
+    console.log('[notifeeAzan] فشل فتح شاشة صلاحية الظهور فوق التطبيقات:', e);
+  }
+}
+
 // ===== دالة الـforeground service - هذا هو المكان اللي فعلياً يشغل الصوت =====
 // notifee يستدعيها تلقائياً كل ما يطلع تنبيه بخاصية asForegroundService: true.
 // المهم: نرجع Promise ما ينحل إلا بعد ما الصوت يخلص أو يوصل أمر إيقاف - طول

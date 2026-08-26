@@ -1,4 +1,5 @@
 ﻿import { ThemeProvider } from '@/contexts/theme-contexts';
+import { registerAzanForegroundService } from '@/utils/notifeeAzan';
 import { registerBackgroundNotificationHandlers } from '@/utils/notifications';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
@@ -12,6 +13,16 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 LogBox.ignoreAllLogs(true);
 
 registerBackgroundNotificationHandlers();
+
+// ⚠️ الإصلاح الجوهري لبگ "الأذان ميوصل": notifee.registerForegroundService
+// لازم ينسجل هنا - بمستوى الملف مباشرة، خارج أي مكوّن/useEffect - حتى يشتغل
+// حتى لو التطبيق انفتح من حالة مقفولة تماماً بسبب تنبيه الأذان نفسه (Android
+// يشغّل جافاسكربت التطبيق من الصفر بهاي الحالة، فلازم التسجيل يصير أول شي
+// وقت تحميل الملف، مو بعد أول render). كانت هذي الدالة معرّفة بـ
+// notifeeAzan.ts من قبل بس ما كانت تنجذب من وين - عشان هيك أندرويد كان يطلع
+// إشعاره العام الافتراضي ("قيد التشغيل") بدل تنبيه الأذان الفعلي (صوت + زر
+// إيقاف)، لأن notifee ما كان يعرف شنو يشغّل لما توصل لحظة تشغيل الخدمة
+registerAzanForegroundService();
 
 // ⚠️ تم حذف السبلاش سكرين عمداً (طلب صريح): ما نستدعي preventAutoHideAsync
 // ولا نتحكم يدوياً بإخفاء الشاشة الأصلية - نتركها تختفي تلقائياً بأسرع وقت

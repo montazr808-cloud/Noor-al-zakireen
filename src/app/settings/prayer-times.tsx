@@ -38,7 +38,7 @@ import {
   SELECTED_VOICE_KEY,
   type CustomVoice,
 } from '@/utils/muezzinVoices';
-import { getExactAlarmPermissionStatus, openExactAlarmSettings, scheduleAzanNotifications } from '@/utils/notifeeAzan';
+import { getExactAlarmPermissionStatus, openExactAlarmSettings, openOverlayPermissionSettings, scheduleAzanNotifications } from '@/utils/notifeeAzan';
 import { scheduleAthkarNotifications } from '@/utils/notificationScheduler';
 import { geocodeAddress, getPrayerTimes } from '@/utils/prayerCalc';
 
@@ -262,6 +262,7 @@ export default function PrayerTimesScreen() {
   // بالإعدادات يعيد استدعاء scheduleNotificationsForTimes) - نعرضه مرة وحدة
   // بس بكل جلسة فتح للشاشة
   const alarmPermissionPromptShownRef = useRef(false);
+  const overlayPermissionPromptShownRef = useRef(false);
 
   // ===== ٢ب. أصوات إضافية مستوردة يدوياً + أصوات خاصة أضافها المستخدم =====
   const [additionalVoiceFiles, setAdditionalVoiceFiles] = useState<Record<string, string>>({});
@@ -542,6 +543,22 @@ export default function PrayerTimesScreen() {
             ]
           );
         }
+      }
+
+      // ===== صلاحية "الظهور فوق التطبيقات الأخرى" - تساعد بطاقة الأذان تطلع
+      // وتنعرض بشكل موثوق حتى لو تطبيق ثاني فاتح بالمقدمة أو الشاشة مقفولة.
+      // ماكو طريقة نتحقق فيها هل ممنوحة فعلاً (قيد حقيقي بأندرويد)، فنعرضها
+      // مرة وحدة بس بالجلسة بغض النظر عن الحالة الفعلية =====
+      if (!overlayPermissionPromptShownRef.current) {
+        overlayPermissionPromptShownRef.current = true;
+        Alert.alert(
+          'صلاحية إضافية موصى فيها',
+          'حتى تنعرض بطاقة الأذان بشكل موثوق فوگ أي تطبيق ثاني تكون فاتحه، فعّل صلاحية "الظهور فوق التطبيقات الأخرى" لتطبيق نور الذاكرين من إعدادات الجهاز.',
+          [
+            { text: 'لاحقاً', style: 'cancel' },
+            { text: 'فتح الإعدادات', onPress: () => openOverlayPermissionSettings() },
+          ]
+        );
       }
     }
   };

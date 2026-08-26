@@ -320,7 +320,14 @@ export async function scheduleAthkarNotifications(
     const { hour, minute } = addMinutes(h0, m0, resolvedOffsets[p.settingKey]);
     const fireDate = new Date();
     fireDate.setHours(hour, minute, 0, 0);
-    if (fireDate.getTime() <= now) continue; // فاتت اليوم - تنجدول بكرة بالتحديث الجاي
+    if (fireDate.getTime() <= now) {
+      // ⚠️ إصلاح: نفس بگ notifeeAzan.ts/nextPrayerNotification.ts بالضبط - كان
+      // "continue" يلغي تعقيب هذي الصلاة نهائياً من الجدولة لليوم بدل ما
+      // يأجله لبكرة كما يقول التعليق القديم. لو عادة المستخدم فتح التطبيق
+      // بعد صلاة معينة يومياً، تعقيبها كان ينحذف كل يوم بنفس الطريقة وما
+      // يوصل أبداً. الحل: نجدوله بكرة بدل الإلغاء
+      fireDate.setDate(fireDate.getDate() + 1);
+    }
     const id = await scheduleOne(notifee, TriggerType, p.title, p.dayId, fireDate);
     if (id) ids.push(id);
   }
