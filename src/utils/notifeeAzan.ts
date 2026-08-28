@@ -118,7 +118,26 @@ export async function openOverlayPermissionSettings(): Promise<void> {
       { data: `package:${ANDROID_PACKAGE_ID}` }
     );
   } catch (e) {
+    // ⚠️ إصلاح: كان الفشل هنا يطبع بـ console.log بس - بنسخة APK منصّبة
+    // عادي، المستخدم ما يشوف الكونسول إطلاقاً، فيدوس الزر ويحس "ماكو شي
+    // صار" بدون أي تفسير. أشيع سبب: مكتبة expo-intent-launcher مو مثبتة
+    // فعلاً بالمشروع (npm/yarn) رغم إن الكود يستخدمها - نطلع تنبيه مرئي
+    // حقيقي بدل ما نخفي الفشل بصمت
     console.log('[notifeeAzan] فشل فتح شاشة صلاحية الظهور فوق التطبيقات:', e);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { Alert, Linking } = require('react-native');
+      Alert.alert(
+        'ما گدرنا نفتح الإعدادات تلقائياً',
+        'افتح إعدادات الجهاز يدوياً > التطبيقات > نور الذاكرين > الظهور فوق التطبيقات الأخرى، وفعّلها من هناك.',
+        [
+          { text: 'حسناً', style: 'cancel' },
+          { text: 'فتح إعدادات التطبيق', onPress: () => Linking.openSettings().catch(() => {}) },
+        ]
+      );
+    } catch {
+      // تجاهل - آخر خط دفاع، ما نگدر نسوي شي أكثر من هذا
+    }
   }
 }
 

@@ -258,11 +258,6 @@ export default function PrayerTimesScreen() {
   // ما يتغيّر الصوت الفعلي المستخدم بالأذان قبل ما تأكد =====
   const [pendingVoice, setPendingVoice] = useState<string>(DEFAULT_VOICE_ID);
   const soundRef = useRef<AudioPlayer | null>(null);
-  // حتى ما نزعج المستخدم بنفس التنبيه كل ما تنعاد جدولة الإشعارات (كل تغيير
-  // بالإعدادات يعيد استدعاء scheduleNotificationsForTimes) - نعرضه مرة وحدة
-  // بس بكل جلسة فتح للشاشة
-  const alarmPermissionPromptShownRef = useRef(false);
-  const overlayPermissionPromptShownRef = useRef(false);
 
   // ===== ٢ب. أصوات إضافية مستوردة يدوياً + أصوات خاصة أضافها المستخدم =====
   const [additionalVoiceFiles, setAdditionalVoiceFiles] = useState<Record<string, string>>({});
@@ -529,36 +524,51 @@ export default function PrayerTimesScreen() {
 
       // ===== فحص صلاحية "التنبيهات والمنبهات الدقيقة" - لو مقفلة، أذان الصلاة
       // ممكن يوصل متأخر بدقايق أو يتجمع مع إشعارات ثانية بدل ما يوصل بالضبط
-      // بوقته. نعرض تنبيه واضح مرة وحدة بالجلسة مع زر يفتح شاشة التفعيل مباشرة =====
-      if (!alarmPermissionPromptShownRef.current) {
-        const alarmStatus = await getExactAlarmPermissionStatus();
-        if (alarmStatus === 'denied') {
-          alarmPermissionPromptShownRef.current = true;
+      // بوقته.
+      // ⚠️ إصلاح: كانت هذي الكتلة (والكتلة اللي تحتها) تستخدم useRef، اللي
+      // ينصفر تلقائياً كل ما تدخل الشاشة من جديد (مكوّن جديد = ref جديد) -
+      // يعني الرسالة كانت تطلع بكل مرة تدخل فيها شاشة أوقات الصلاة، مو مرة
+      // وحدة فعلياً. الحل: مفتاح دائم بـ AsyncStorage (نفس أسلوب
+      // ALARM_PERMISSION_PROMPTED_KEY المستخدم بـ notifications.ts) - يبقى
+      // محفوظ حتى بعد إغلاق التطبيق بالكامل، فتطلع الرسالة مرة وحدة طول عمر
+      // التطبيق على الجهاز (إلا إذا المستخدم مسح بيانات التطبيق يدوياً) =====
+      try {
+        const alarmPrompted = await AsyncStorage.getItem('@prayer_alarm_permission_prompted_v1');
+        if (alarmPrompted !== 'true') {
+          const alarmStatus = await getExactAlarmPermissionStatus();
+          if (alarmStatus === 'denied') {
+            await AsyncStorage.setItem('@prayer_alarm_permission_prompted_v1', 'true');
+            Alert.alert(
+              'صلاحية إضافية مطلوبة لدقة الأذان',
+              'حتى يوصلك الأذان بالضبط بوقته (مو متأخر بدقايق)، فعّل صلاحية "التنبيهات والمنبهات" لتطبيق نور الذاكرين من إعدادات الجهاز.',
+              [
+                { text: 'لاحقاً', style: 'cancel' },
+                { text: 'فتح الإعدادات', onPress: () => openExactAlarmSettings() },
+              ]
+            );
+          }
+        }
+      } catch {
+        // تجاهل فشل قراءة/كتابة AsyncStorage - أسوأ حالة الرسالة تطلع مرة زيادة
+      }
+
+      // ===== صلاحية "الظهور فوق التطبيقات الأخرى" - نفس مبدأ التخزين الدائم
+      // فوگ، بمفتاح منفصل =====
+      try {
+        const overlayPrompted = await AsyncStorage.getItem('@prayer_overlay_permission_prompted_v1');
+        if (overlayPrompted !== 'true') {
+          await AsyncStorage.setItem('@prayer_overlay_permission_prompted_v1', 'true');
           Alert.alert(
-            'صلاحية إضافية مطلوبة لدقة الأذان',
-            'حتى يوصلك الأذان بالضبط بوقته (مو متأخر بدقايق)، فعّل صلاحية "التنبيهات والمنبهات" لتطبيق نور الذاكرين من إعدادات الجهاز.',
+            'صلاحية إضافية موصى فيها',
+            'حتى تنعرض بطاقة الأذان بشكل موثوق فوگ أي تطبيق ثاني تكون فاتحه، فعّل صلاحية "الظهور فوق التطبيقات الأخرى" لتطبيق نور الذاكرين من إعدادات الجهاز.',
             [
               { text: 'لاحقاً', style: 'cancel' },
-              { text: 'فتح الإعدادات', onPress: () => openExactAlarmSettings() },
+              { text: 'فتح الإعدادات', onPress: () => openOverlayPermissionSettings() },
             ]
           );
         }
-      }
-
-      // ===== صلاحية "الظهور فوق التطبيقات الأخرى" - تساعد بطاقة الأذان تطلع
-      // وتنعرض بشكل موثوق حتى لو تطبيق ثاني فاتح بالمقدمة أو الشاشة مقفولة.
-      // ماكو طريقة نتحقق فيها هل ممنوحة فعلاً (قيد حقيقي بأندرويد)، فنعرضها
-      // مرة وحدة بس بالجلسة بغض النظر عن الحالة الفعلية =====
-      if (!overlayPermissionPromptShownRef.current) {
-        overlayPermissionPromptShownRef.current = true;
-        Alert.alert(
-          'صلاحية إضافية موصى فيها',
-          'حتى تنعرض بطاقة الأذان بشكل موثوق فوگ أي تطبيق ثاني تكون فاتحه، فعّل صلاحية "الظهور فوق التطبيقات الأخرى" لتطبيق نور الذاكرين من إعدادات الجهاز.',
-          [
-            { text: 'لاحقاً', style: 'cancel' },
-            { text: 'فتح الإعدادات', onPress: () => openOverlayPermissionSettings() },
-          ]
-        );
+      } catch {
+        // تجاهل
       }
     }
   };
@@ -849,14 +859,22 @@ player.addListener('playbackStatusUpdate', (status) => {
           <View style={{ width: 34 }} />
         </View>
 
-        {/* ===== نفس بانر التنبيه الموجود بصوت المؤذن - يوضح إن التغييرات
-        بس مسودة لين تنحفظ صريحاً بزر "حفظ" بالأسفل ===== */}
+        {/* ===== نفس بانر التنبيه الموجود بصوت المؤذن - بس هسه فيه زر "حفظ"
+        جوه البانر نفسه (قريب من مكان الاختيار)، مو بس بالأسفل - طلب صريح
+        حتى ما تحتاج تنزل لآخر الشاشة كل ما تغيّر مدة التنبيه أو المؤذن ===== */}
         {notifHasUnsavedChanges && (
           <View style={[styles.unsavedBanner, { borderRadius: 14, marginBottom: 14, borderBottomWidth: 0 }]}>
             <Ionicons name="alert-circle-outline" size={14} color={GOLD} />
-            <Text style={styles.unsavedBannerText}>
-              عندك تغييرات ما انحفظت، اضغط "حفظ" بالأسفل حتى تصير فعلية
+            <Text style={[styles.unsavedBannerText, { flex: 1 }]}>
+              عندك تغييرات ما انحفظت
             </Text>
+            <TouchableOpacity
+              style={styles.inlineSaveBtn}
+              onPress={saveNotifChanges}
+            >
+              <Ionicons name="checkmark-circle" size={16} color="#0d1f2d" />
+              <Text style={styles.inlineSaveBtnText}>حفظ</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -1115,9 +1133,20 @@ player.addListener('playbackStatusUpdate', (status) => {
             {pendingVoice !== selectedVoice && (
               <View style={styles.unsavedBanner}>
                 <Ionicons name="alert-circle-outline" size={14} color={GOLD} />
-                <Text style={styles.unsavedBannerText}>
-                  اخترت صوت جديد، اضغط "حفظ الاختيار" تحت حتى يصير هو صوت الأذان
+                <Text style={[styles.unsavedBannerText, { flex: 1 }]}>
+                  اخترت صوت جديد
                 </Text>
+                <TouchableOpacity
+                  style={styles.inlineSaveBtn}
+                  onPress={() => {
+                    setSelectedVoice(pendingVoice);
+                    setShowVoicePicker(false);
+                    showToast('تم الحفظ', 'انحفظ صوت المؤذن وراح يُستخدم بالأذان القادم', 'success');
+                  }}
+                >
+                  <Ionicons name="checkmark-circle" size={16} color="#0d1f2d" />
+                  <Text style={styles.inlineSaveBtnText}>حفظ</Text>
+                </TouchableOpacity>
               </View>
             )}
 
@@ -1693,6 +1722,16 @@ const styles = StyleSheet.create({
     backgroundColor: `rgba(${NEON_RGB},0.08)`,
   },
   unsavedBannerText: { color: GOLD, fontSize: 11.5, fontWeight: '600', flex: 1, textAlign: 'right' },
+  inlineSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: GOLD,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  inlineSaveBtnText: { color: '#0d1f2d', fontSize: 12.5, fontWeight: '700' },
   voiceSaveRow: {
     flexDirection: 'row',
     gap: 10,

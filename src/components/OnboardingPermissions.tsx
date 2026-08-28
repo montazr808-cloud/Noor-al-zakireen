@@ -163,6 +163,14 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
         const result = await requestMicrophone();
         setStatuses((prev) => ({ ...prev, microphone: result }));
       } else if (key === 'alarm') {
+        // نسجل إنها انعرضت هنا بنفس المفتاح اللي تتحقق منه شاشة أوقات
+        // الصلاة (@prayer_alarm_permission_prompted_v1) - حتى ما تطلع
+        // رسالتها مرة ثانية هناك بعد ما خلصنا منها بشاشة الترحيب
+        try {
+          await AsyncStorage.setItem('@prayer_alarm_permission_prompted_v1', 'true');
+        } catch {
+          // تجاهل - أسوأ حالة تطلع رسالة شاشة أوقات الصلاة مرة زيادة
+        }
         await openExactAlarmSettings();
         // نعيد الفحص بعد رجوع المستخدم من الإعدادات (تقريبي - ما نگدر نعرف
         // بالضبط لحظة الرجوع من غير AppState listener، فنعطي مهلة بسيطة)
@@ -170,6 +178,12 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
           checkAlarm().then((s) => setStatuses((prev) => ({ ...prev, alarm: s })));
         }, 800);
       } else if (key === 'overlay') {
+        // نفس المبدأ فوگ - مفتاح شاشة أوقات الصلاة لصلاحية الظهور فوق التطبيقات
+        try {
+          await AsyncStorage.setItem('@prayer_overlay_permission_prompted_v1', 'true');
+        } catch {
+          // تجاهل
+        }
         await openOverlayPermissionSettings();
         // ماكو فحص برمجي متاح لهذي الصلاحية (قيد حقيقي بأندرويد) - نعتبرها
         // "تفاعل معها" بس، مو نتحقق من نتيجتها فعلياً
