@@ -193,6 +193,7 @@ export async function syncNajafOffset(): Promise<boolean> {
   try {
     const lastSyncDay = await AsyncStorage.getItem(OFFSET_DATE_KEY);
     if (lastSyncDay === todayKey()) {
+      console.log('[hijriSync] تمت المزامنة اليوم مسبقاً، الإزاحة الحالية:', cachedOffset);
       return true; // تمت المزامنة اليوم مسبقاً
     }
 
@@ -200,24 +201,43 @@ export async function syncNajafOffset(): Promise<boolean> {
     const timeout = setTimeout(() => controller.abort(), 8000);
     let html: string;
     try {
-      const res = await fetch('https://www.sistani.org/', { signal: controller.signal });
+      const res = await fetch('https://www.sistani.org/', {
+        signal: controller.signal,
+        headers: {
+          // بعض المواقع (خصوصاً المحمية بـCloudflare) ترفض الطلبات اللي ماكو
+          // فيها User-Agent يشبه متصفح حقيقي وترجع صفحة تحدي بدل المحتوى
+          // الفعلي - هذا الهيدر يخلي الطلب يبان مثل طلب متصفح عادي
+          'User-Agent':
+            'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+        },
+      });
+      console.log('[hijriSync] استجابة sistani.org:', res.status);
       html = await res.text();
+      console.log('[hijriSync] طول HTML المستلم:', html.length);
     } finally {
       clearTimeout(timeout);
     }
 
     const parsed = parseSistaniDateFromHtml(html);
-    if (!parsed) return false;
+    if (!parsed) {
+      console.log('[hijriSync] فشل تحليل التاريخ من HTML - أول 300 حرف:', html.slice(0, 300));
+      return false;
+    }
+    console.log('[hijriSync] التاريخ المستخرج من السيستاني:', parsed);
 
     const apiJDN = islamicCivilToJDN(parsed.year, parsed.month, parsed.day);
     const now = new Date();
     const todayJDN = gregorianToJDN(now.getFullYear(), now.getMonth() + 1, now.getDate());
     const offset = apiJDN - todayJDN;
+    console.log('[hijriSync] الإزاحة المحسوبة:', offset);
 
     // حماية: أكبر فرق طبيعي متوقع بين الحساب الفلكي والرؤية الشرعية يوم أو
     // يومين - أي فرق أكبر من هذا غالباً خطأ بارسنغ أو تغيّر بصيغة الصفحة،
     // نتجاهله ونحافظ على آخر offset سليم بدل تطبيق رقم غلط
-    if (Math.abs(offset) > 2) return false;
+    if (Math.abs(offset) > 2) {
+      console.log('[hijriSync] الإزاحة أكبر من المتوقع (>2)، نتجاهلها');
+      return false;
+    }
 
     if (offset !== cachedOffset) {
       cachedOffset = offset;
@@ -227,7 +247,8 @@ export async function syncNajafOffset(): Promise<boolean> {
     await AsyncStorage.setItem(OFFSET_KEY, String(offset));
     await AsyncStorage.setItem(OFFSET_DATE_KEY, todayKey());
     return true;
-  } catch {
+  } catch (e) {
+    console.log('[hijriSync] فشلت المزامنة بخطأ:', e);
     return false;
   }
 }

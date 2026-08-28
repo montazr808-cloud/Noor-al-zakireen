@@ -82,7 +82,8 @@
           "icon": "./src/assets/notification-icon.png",
           "color": "#4586BE"
         }
-      ]
+      ],
+      "./plugins/withNotificationIcons.js"
     ],
     "extra": {
       "router": {},

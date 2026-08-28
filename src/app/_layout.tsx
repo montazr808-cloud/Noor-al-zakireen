@@ -1,12 +1,14 @@
-﻿import { ThemeProvider } from '@/contexts/theme-contexts';
+﻿import OnboardingPermissions, { ONBOARDING_DONE_KEY } from '@/components/OnboardingPermissions';
+import { ThemeProvider } from '@/contexts/theme-contexts';
 import { registerAzanForegroundService } from '@/utils/notifeeAzan';
 import { registerBackgroundNotificationHandlers } from '@/utils/notifications';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 import { useFonts } from 'expo-font';
 import * as Notifications from 'expo-notifications';
 import { router, Tabs } from 'expo-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { ColorValue, LogBox, Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -107,10 +109,26 @@ export default function Layout() {
     });
   }, []);
 
+  // ===== شاشة الترحيب/الصلاحيات - تطلع مرة وحدة بس بأول فتحة تطبيق =====
+  // null = لسا نتحقق من AsyncStorage (نتجنب "ومضة" نعرض فيها التبويبات
+  // لحظة وحدة قبل ما نعرف الحالة الحقيقية)؛ false = لازم تطلع؛ true = خلص
+  // منها قبل، نروح مباشرة للتطبيق
+  const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    AsyncStorage.getItem(ONBOARDING_DONE_KEY)
+      .then((v) => setOnboardingDone(v === 'true'))
+      .catch(() => setOnboardingDone(true)); // فشل القراءة - ما نحبس المستخدم، نكمل عادي
+  }, []);
+
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <TabsNavigator />
+        {onboardingDone === false ? (
+          <OnboardingPermissions onDone={() => setOnboardingDone(true)} />
+        ) : onboardingDone === null ? null : (
+          <TabsNavigator />
+        )}
       </ThemeProvider>
     </SafeAreaProvider>
   );

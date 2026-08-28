@@ -9,6 +9,13 @@
 // notifee.requestPermission() مباشرة - نفس السبب بالضبط الموضح بملف
 // notificationScheduler.ts (نظامي الصلاحية طلعوا مو متطابقين دايماً على كل
 // الأجهزة، وهذا كان يقطع جدولة المناسبات كلياً وبصمت).
+//
+// ⚠️ إصلاح (طلب صريح): الإعداد الافتراضي كان occasions:false, whiteDays:false
+// - يعني إشعارات المناسبات الهجرية والأيام البيض تضل مقفولة لحد المستخدم
+// يدخل يدوياً لإعدادات التقويم ويفعّلها. بما إن المطلوب الحين كل الإشعارات
+// تشتغل من أول فتحة تطبيق (مو تحتاج تفعيل يدوي منتشر بكل شاشة)، صار
+// الافتراضي true لكل النوعين - أول مستخدم يفتح التطبيق يحصل عليهم تلقائياً،
+// وبعدين يقدر يوقفهم يدوياً من إعدادات التقويم إذا ما يريدهم
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
@@ -94,7 +101,7 @@ export async function getHijriNotifPrefs(): Promise<HijriNotifPrefs> {
   } catch {
     // تجاهل، نرجع القيم الافتراضية
   }
-  return { occasions: false, whiteDays: false };
+  return { occasions: true, whiteDays: true };
 }
 
 export async function setHijriNotifPrefs(prefs: HijriNotifPrefs): Promise<void> {

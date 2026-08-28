@@ -147,7 +147,11 @@ export async function scheduleVerseNotifications(times: PrayerTimesResult): Prom
     const { hour, minute } = addMinutes(h0, m0, VERSE_OFFSET_MINUTES);
     const fireDate = new Date();
     fireDate.setHours(hour, minute, 0, 0);
-    if (fireDate.getTime() <= now) continue; // فاتت اليوم - تنجدول بكرة بالتحديث الجاي
+    if (fireDate.getTime() <= now) {
+      // ⚠️ إصلاح: نفس بگ notifeeAzan.ts/nextPrayerNotification.ts/
+      // notificationScheduler.ts بالضبط - نجدولها بكرة بدل إلغائها نهائياً
+      fireDate.setDate(fireDate.getDate() + 1);
+    }
 
     const idx = indexes[prayer] % refs.length;
     const ref = refs[idx];

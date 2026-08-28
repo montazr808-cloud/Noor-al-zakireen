@@ -118,10 +118,17 @@ export async function initializeAppNotifications(settings: Partial<FullNotificat
 
   let coords = settings.coords;
 
-  // لو ما انعطت إحداثيات، نجرب نجيبها من موقع الجهاز (نفس صلاحية القبلة/أوقات الصلاة)
+  // ⚠️ إصلاح جوهري: كان هنا getForegroundPermissionsAsync (يتحقق بس، ما يطلب).
+  // بأول فتحة تطبيق (قبل ما يزور المستخدم شاشة أوقات الصلاة اللي تطلب الموقع
+  // بنفسها بشكل منفصل)، الصلاحية تكون "غير محددة" فيرجع status != 'granted'،
+  // فـ coords يضل فاضي، وكل الكتلة تحت (أذكار + الصلاة القادمة + آية بعد
+  // الصلاة) تنتخطى بالكامل بصمت - وهذا بالضبط سبب "بس الأذان يشتغل والباقي لا"
+  // (الأذان إله مسار منفصل تماماً بشاشة أوقات الصلاة تطلب الموقع لحالها).
+  // الحل: نستخدم requestForegroundPermissionsAsync اللي يطلب الصلاحية فعلياً
+  // (يطلع نافذة النظام) لو مو ممنوحة بعد، بدل ما يكتفي بالتحقق الصامت
   if (!coords) {
     try {
-      const { status } = await Location.getForegroundPermissionsAsync();
+      const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
         const pos = await Location.getCurrentPositionAsync({});
         coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
