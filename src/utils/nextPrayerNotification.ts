@@ -27,6 +27,9 @@ const PRAYER_TITLES: Record<PrayerKey, string> = {
 
 const CHANNEL_ID = 'next-prayer-status';
 const NOTIF_IDS_KEY = 'noor_nextPrayerNotifIds';
+// معرّف ثابت لإشعار "الحالة الحالية" (displayCurrentPrayerNotification) -
+// يضمن التحديث بمكانه بدل تكرار نسخ جديدة بكل فتحة تطبيق
+const CURRENT_STATUS_NOTIF_ID = 'next-prayer-current-status';
 const OPEN_PRAYER_TIMES_ACTION = 'open-prayer-times';
 const OPEN_TASBIH_ACTION = 'open-tasbih';
 
@@ -111,6 +114,11 @@ export async function displayCurrentPrayerNotification(times: PrayerTimesInput):
 
   try {
     await notifee.displayNotification({
+      // ⚠️ إصلاح: بدون id ثابت، notifee يسوي إشعار جديد كل استدعاء (يعني
+      // كل فتحة تطبيق = نسخة جديدة تتكدس فوق القديمة بدل ما تحدّثها) - هذا
+      // بالضبط سبب "صلاة العصر" تطلع 3 مرات مكررة. id ثابت يخلي notifee
+      // يحدّث نفس الإشعار مكانه دايماً، بغض النظر عن عدد مرات الاستدعاء
+      id: CURRENT_STATUS_NOTIF_ID,
       title,
       body,
       data: { screen: 'home' },

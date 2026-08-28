@@ -162,7 +162,8 @@ export async function initializeAppNotifications(settings: Partial<FullNotificat
       }
       azanCount = await scheduleAzanNotifications(
         times,
-        azanEnabled ?? { fajr: true, dhuhr: true, asr: true, maghrib: true, isha: true }
+        azanEnabled ?? { fajr: true, dhuhr: true, asr: true, maghrib: true, isha: true },
+        coords
       );
       await scheduleNextPrayerNotifications(times);
       verseCount = await scheduleVerseNotifications(times);

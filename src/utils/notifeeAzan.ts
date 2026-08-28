@@ -250,12 +250,20 @@ export function handleAzanEvent(type: any, detail: any, EventType: any): boolean
 }
 
 // ===== الجدولة - تنبيه "مستمر" بالضبط بوقت كل صلاة =====
-// ملاحظة: لازم تنعاد هذي الدالة يومياً (مثلاً كل ما يفتح التطبيق، بنفس مبدأ
-// scheduleAthkarNotifications) لأن وقت الصلاة يتغير كل يوم شوي ولازم تحديث
-// التوقيت المجدول باستمرار.
+// ⚠️ إصلاح (طلب صريح: الأذان يوصل بوقته حتى لو ما فتحت التطبيق كم يوم):
+// قبل، الدالة تجدول ليوم وحد بس (اليوم، أو باچر إذا فات وقت اليوم) - يعني
+// لازم تفتح التطبيق يومياً حتى تنجدد الجدولة. هسه لو انعطت `coords`، نحسب
+// أوقات الصلاة الفعلية لكل يوم من ٧ أيام قدام (عبر getPrayerTimes بملف
+// prayerCalc.ts، نفس الحساب المستخدم بكل التطبيق) ونجدول كل صلاة بكل يوم -
+// فيضل الأذان يوصل بوقته الصحيح أسبوع كامل بدون فتح التطبيق. إذا ما انعطت
+// coords (استدعاء قديم)، ترجع لنفس السلوك السابق (يوم وحد) حتى ما ينكسر أي
+// استدعاء موجود.
+const AZAN_DAYS_AHEAD = 7;
+
 export async function scheduleAzanNotifications(
   prayerTimes: Record<'fajr' | 'dhuhr' | 'asr' | 'maghrib' | 'isha', string>,
-  enabled: Record<'fajr' | 'dhuhr' | 'asr' | 'maghrib' | 'isha', boolean>
+  enabled: Record<'fajr' | 'dhuhr' | 'asr' | 'maghrib' | 'isha', boolean>,
+  coords?: { latitude: number; longitude: number }
 ): Promise<number> {
   if (Platform.OS !== 'android') return 0; // آيفون: يبقى على المنطق المنفصل بملف الشاشة
 
@@ -280,60 +288,77 @@ export async function scheduleAzanNotifications(
   const ids: string[] = [];
   const now = Date.now();
 
-  for (const key of Object.keys(PRAYER_TITLES) as (keyof typeof PRAYER_TITLES)[]) {
-    if (!enabled[key as keyof typeof enabled]) continue;
-    const timeStr = prayerTimes[key as keyof typeof prayerTimes];
-    if (!timeStr) continue;
+  // ===== نبني قائمة "أيام" نجدول عليها: يوم وحد (اليوم، بأوقات prayerTimes
+  // المرسلة) إذا ماكو coords، أو ٧ أيام (اليوم + ٦ قدام، بأوقات محسوبة فعلياً
+  // لكل يوم) إذا انعطت coords =====
+  type DayTimes = { timesForKey: Record<string, string>; dateBase: Date };
+  const days: DayTimes[] = [];
 
-    const [h, m] = timeStr.split(':').map(Number);
-    const fireDate = new Date();
-    fireDate.setHours(h, m, 0, 0);
-    if (fireDate.getTime() <= now) {
-      // ⚠️ إصلاح: قبل، هذا السطر كان "continue" (يلغي الصلاة نهائياً من الجدولة
-      // إذا فات وقتها اليوم) - وبما إن هذي الدالة تنعاد بس لما يفتح المستخدم
-      // التطبيق، أي صلاة عادةً يفتح التطبيق بعدها (مثلاً الظهر) كانت تنحذف من
-      // الجدولة كل يوم بنفس الطريقة، فما توصل أبداً. الحل: نجدولها بكرة
-      // بنفس الوقت بدل الإلغاء - وبما إن الدالة تنعاد وتحدّث الوقت كل ما
-      // يفتح التطبيق، الفرق البسيط (دقيقة/دقيقتين) بين وقت اليوم ووقت بكرة
-      // الفلكي الفعلي ينصحح لحاله بأول فتحة جاية للتطبيق
-      fireDate.setDate(fireDate.getDate() + 1);
+  if (coords) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { getPrayerTimes } = require('./prayerCalc');
+    for (let i = 0; i < AZAN_DAYS_AHEAD; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() + i);
+      const t = getPrayerTimes(coords.latitude, coords.longitude, d);
+      days.push({
+        timesForKey: { fajr: t.fajr, dhuhr: t.dhuhr, asr: t.asr, maghrib: t.maghrib, isha: t.isha },
+        dateBase: d,
+      });
     }
+  } else {
+    days.push({ timesForKey: prayerTimes as any, dateBase: new Date() });
+  }
 
-    try {
-      const id = await notifee.createTriggerNotification(
-        {
-          title: PRAYER_TITLES[key],
-          body: 'حان وقت الصلاة',
-          android: {
-            channelId: AZAN_CHANNEL_ID,
-            asForegroundService: true,
-            ongoing: true,
-            visibility: AndroidVisibility.PUBLIC,
-            category: AndroidCategory.ALARM,
-            // ⚠️ إصلاح: هذا الاشعار كان الوحيد اللي ما محدد له smallIcon/largeIcon
-            // بشكل صريح، فـnotifee كان يرجع تلقائياً لأيقونة التطبيق الملونة
-            // الكبيرة كصورة الاشعار (مختلفة عن شكل باقي الاشعارات النظيف)
-            smallIcon: 'ic_notification',
-            largeIcon: 'ic_notification_large',
-            pressAction: { id: 'default' },
-            actions: [{ title: 'إيقاف الأذان', pressAction: { id: STOP_ACTION_ID } }],
+  for (const day of days) {
+    for (const key of Object.keys(PRAYER_TITLES) as (keyof typeof PRAYER_TITLES)[]) {
+      if (!enabled[key as keyof typeof enabled]) continue;
+      const timeStr = day.timesForKey[key as keyof typeof prayerTimes];
+      if (!timeStr) continue;
+
+      const [h, m] = timeStr.split(':').map(Number);
+      const fireDate = new Date(day.dateBase);
+      fireDate.setHours(h, m, 0, 0);
+      if (fireDate.getTime() <= now) {
+        if (coords) continue; // بوضع الأسبوع: يوم فات كامل يتخطى (يوم ثاني بالقائمة بيغطيه)
+        // ⚠️ إصلاح (وضع اليوم الواحد القديم، بدون coords): بدل الإلغاء
+        // النهائي، نجدولها بكرة بنفس الوقت
+        fireDate.setDate(fireDate.getDate() + 1);
+      }
+
+      try {
+        const id = await notifee.createTriggerNotification(
+          {
+            title: PRAYER_TITLES[key],
+            body: 'حان وقت الصلاة',
+            android: {
+              channelId: AZAN_CHANNEL_ID,
+              asForegroundService: true,
+              ongoing: true,
+              visibility: AndroidVisibility.PUBLIC,
+              category: AndroidCategory.ALARM,
+              smallIcon: 'ic_notification',
+              largeIcon: 'ic_notification_large',
+              pressAction: { id: 'default' },
+              actions: [{ title: 'إيقاف الأذان', pressAction: { id: STOP_ACTION_ID } }],
+            },
           },
-        },
-        {
-          type: TriggerType.TIMESTAMP,
-          timestamp: fireDate.getTime(),
-          // ⚠️ إصلاح جوهري (توحيد ثبات الإشعارات بكل الهواتف): بدون alarmManager
-          // صريح، notifee يجدول التنبيه كـ"غير دقيق" على أندرويد - يعني النظام
-          // (خصوصاً هواوي/شاومي وبدرجة أقل سامسونج) يأجله أو يجمعه حسب وضع توفير
-          // البطارية (Doze)، وهذا بالضبط سبب "يشتغل بهاتف وما يشتغل بهاتف ثاني".
-          // allowWhileIdle:true يجبر النظام يوصل التنبيه بالضبط بوقته حتى لو
-          // الجهاز بوضع نوم عميق - هذا الأهم إشعار بالتطبيق (الأذان نفسه).
-          alarmManager: { allowWhileIdle: true },
-        }
-      );
-      ids.push(id);
-    } catch {
-      // نتجاوز صلاة وحدة ونكمل الباقي
+          {
+            type: TriggerType.TIMESTAMP,
+            timestamp: fireDate.getTime(),
+            // ⚠️ إصلاح جوهري (توحيد ثبات الإشعارات بكل الهواتف): بدون alarmManager
+            // صريح، notifee يجدول التنبيه كـ"غير دقيق" على أندرويد - يعني النظام
+            // (خصوصاً هواوي/شاومي وبدرجة أقل سامسونج) يأجله أو يجمعه حسب وضع توفير
+            // البطارية (Doze)، وهذا بالضبط سبب "يشتغل بهاتف وما يشتغل بهاتف ثاني".
+            // allowWhileIdle:true يجبر النظام يوصل التنبيه بالضبط بوقته حتى لو
+            // الجهاز بوضع نوم عميق - هذا الأهم إشعار بالتطبيق (الأذان نفسه).
+            alarmManager: { allowWhileIdle: true },
+          }
+        );
+        ids.push(id);
+      } catch {
+        // نتجاوز صلاة وحدة ونكمل الباقي
+      }
     }
   }
 

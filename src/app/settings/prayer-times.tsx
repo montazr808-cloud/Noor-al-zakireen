@@ -502,6 +502,17 @@ export default function PrayerTimesScreen() {
     // كل صلاة من هذي الشاشة - حتى يضل متزامن مع تنبيه "قربت الصلاة" فوگ =====
     if (Platform.OS === 'android') {
       try {
+        let coordsForAzan: { latitude: number; longitude: number } | undefined;
+        try {
+          const rawCoords = await AsyncStorage.getItem(SAVED_COORDS_KEY);
+          if (rawCoords) {
+            const parsed = JSON.parse(rawCoords);
+            coordsForAzan = { latitude: parsed.latitude, longitude: parsed.longitude };
+          }
+        } catch {
+          // تجاهل - بدون coords، الدالة ترجع لجدولة يوم وحد كالسابق (مو خطأ حرج)
+        }
+
         await scheduleAzanNotifications(
           {
             fajr: currentTimes.fajr,
@@ -516,7 +527,8 @@ export default function PrayerTimesScreen() {
             asr: settings.asr,
             maghrib: settings.maghrib,
             isha: settings.isha,
-          }
+          },
+          coordsForAzan
         );
       } catch {
         // ما نوقف باقي الشاشة لأجل هذا - تنبيه "قربت الصلاة" فوگ ضل شغال بأي حال
