@@ -1,30 +1,26 @@
 ﻿import OnboardingPermissions, { ONBOARDING_DONE_KEY } from '@/components/OnboardingPermissions';
 import { ThemeProvider } from '@/contexts/theme-contexts';
-import { registerAzanForegroundService } from '@/utils/notifeeAzan';
-import { registerBackgroundNotificationHandlers } from '@/utils/notifications';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 import { useFonts } from 'expo-font';
-import * as Notifications from 'expo-notifications';
-import { router, Tabs } from 'expo-router';
+import { Tabs } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ColorValue, LogBox, Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 LogBox.ignoreAllLogs(true);
 
-registerBackgroundNotificationHandlers();
-
-// ⚠️ الإصلاح الجوهري لبگ "الأذان ميوصل": notifee.registerForegroundService
-// لازم ينسجل هنا - بمستوى الملف مباشرة، خارج أي مكوّن/useEffect - حتى يشتغل
-// حتى لو التطبيق انفتح من حالة مقفولة تماماً بسبب تنبيه الأذان نفسه (Android
-// يشغّل جافاسكربت التطبيق من الصفر بهاي الحالة، فلازم التسجيل يصير أول شي
-// وقت تحميل الملف، مو بعد أول render). كانت هذي الدالة معرّفة بـ
-// notifeeAzan.ts من قبل بس ما كانت تنجذب من وين - عشان هيك أندرويد كان يطلع
-// إشعاره العام الافتراضي ("قيد التشغيل") بدل تنبيه الأذان الفعلي (صوت + زر
-// إيقاف)، لأن notifee ما كان يعرف شنو يشغّل لما توصل لحظة تشغيل الخدمة
-registerAzanForegroundService();
+// ⚠️ إصلاح (٢٠٢٦-٠٨-٢٩): registerAzanForegroundService() و
+// registerBackgroundNotificationHandlers() (اللي تنادي نفس الدالة زائد
+// registerAllNotificationEventListeners()) كانوا يتسجلون هنا بمستوى الملف
+// *بالإضافة* لتسجيلهم أصلاً بـindex.js. notifee موثّق رسمياً إن تسجيل
+// onForegroundEvent/onBackgroundEvent أكثر من مرة بكل التطبيق يخلي بس آخر
+// تسجيل يشتغل فعلياً والباقي ينمسح بصمت - يعني كان عندنا تسجيلين يتصارعون
+// على نفس الدور بدون أي خطأ واضح بالكونسول يفسر السبب. الحل: التسجيل يصير
+// بمكان وحيد بس (index.js، نقطة الدخول الحقيقية وأول ملف ينفذ، حتى قبل
+// _layout.tsx - هذا مطابق تماماً لتوثيق notifee نفسه لمتطلب الـforeground
+// service). ما نحتاج نكرره هنا إطلاقاً.
 
 // ⚠️ تم حذف السبلاش سكرين عمداً (طلب صريح): ما نستدعي preventAutoHideAsync
 // ولا نتحكم يدوياً بإخفاء الشاشة الأصلية - نتركها تختفي تلقائياً بأسرع وقت
@@ -80,20 +76,13 @@ export default function Layout() {
     }
   }, [fontError]);
 
-  useEffect(() => {
-    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const dayId = response.notification.request.content.data?.dayId as string | undefined;
-
-      if (dayId) {
-        router.push({
-          pathname: '/athkar',
-          params: { dayId },
-        } as any);
-      }
-    });
-
-    return () => sub.remove();
-  }, []);
+  // ⚠️ إصلاح (٢٠٢٦-٠٨-٢٩): كان هنا معالج ضغطة إشعار عبر
+  // Notifications.addNotificationResponseReceivedListener من مكتبة
+  // expo-notifications القديمة - نظام مهجور بالكامل من زمان، كل الإشعارات
+  // الحالية (أذكار/أذان/آيات/مناسبات) تمر عبر notifee ونقطة التسجيل
+  // المركزية notificationEvents.ts (المسجّلة بـindex.js). هذا المعالج هنا
+  // ما كان ينادى إطلاقاً لأي إشعار حقيقي بالتطبيق - كود ميت يسبب لبس بس،
+  // انحذف بالكامل.
 
   useEffect(() => {
     import('@/utils/notifications').then(({ initializeAppNotifications }) => {

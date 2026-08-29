@@ -243,7 +243,7 @@ export default function AthkarScreen() {
 
   const [fontScale, setFontScale] = useState(1);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [notifEnabled, setNotifEnabled] = useState(false);
+  const [notifEnabled, setNotifEnabled] = useState(true);
   const [notifBusy, setNotifBusy] = useState(false);
   const [notifMsg, setNotifMsg] = useState<string | null>(null);
   const [notifSettings, setNotifSettings] = useState<AthkarNotificationSettings>(DEFAULT_ATHKAR_NOTIFICATION_SETTINGS);
@@ -316,7 +316,30 @@ export default function AthkarScreen() {
       }
     });
     AsyncStorage.getItem(FONT_KEY).then(raw => raw && setFontScale(JSON.parse(raw)));
-    AsyncStorage.getItem(NOTIF_MASTER_KEY).then(raw => setNotifEnabled(raw === 'true'));
+    // ⚠️ إصلاح (٢٠٢٦-٠٨-٢٩): كان الافتراضي "غير مفعّلة" (raw === 'true' يرجع
+    // false لو المفتاح ماكو أصلاً بـAsyncStorage) لحد ما يدوس المستخدم يدوياً
+    // على المفتاح بهذي الشاشة. المشكلة: initializeAppNotifications بـ_layout.tsx
+    // أصلاً يجدول أذكار كل الأنواع تلقائياً من أول فتحة تطبيق، بغض النظر عن
+    // هذا المفتاح (يعتمد بس على إعدادات كل نوع بـgetAthkarNotificationSettings،
+    // الافتراضي لها كلها true) - يعني الجدولة الحقيقية تصير بالخلفية سواء
+    // ضغط المستخدم المفتاح أو لا. بس الواجهة كانت تبين "غير مفعّلة" بشكل
+    // مضلل، وأغلب المستخدمين ما يعرفون يحتاجون يدخلون هالشاشة أصلاً ويفعّلونها
+    // يدوياً - فيحسّون الأذكار "ما توصل" رغم إنها مجدولة فعلاً، أو أسوأ:
+    // بعض المسارات (مثل toggleNotifSetting/changeOffset) تتحقق من notifEnabled
+    // قبل لا تعيد الجدولة عند أي تعديل، فبقاء notifEnabled=false يمنع أي
+    // تحديث مستقبلي للجدولة حتى لو صارت أصلاً مرة وحدة تلقائياً.
+    // الحل: أول فتحة تطبيق (المفتاح ماكو إطلاقاً بـAsyncStorage، يعني
+    // raw === null) نعتبرها مفعّلة تلقائياً ونحفظها كذلك، فتتطابق الواجهة مع
+    // الواقع من أول لحظة. لو المستخدم أوقفها يدوياً بنفسه قبل (raw === 'false')،
+    // نحترم قراره ونضلها موقوفة.
+    AsyncStorage.getItem(NOTIF_MASTER_KEY).then(raw => {
+      if (raw === null) {
+        setNotifEnabled(true);
+        AsyncStorage.setItem(NOTIF_MASTER_KEY, 'true').catch(() => {});
+      } else {
+        setNotifEnabled(raw === 'true');
+      }
+    });
     AsyncStorage.getItem(SEARCH_HISTORY_KEY).then(raw => raw && setSearchHistory(JSON.parse(raw)));
     getAthkarNotificationSettings().then(setNotifSettings);
     getAthkarOffsets().then(setNotifOffsets);
