@@ -106,22 +106,24 @@ async function resolveLocalUri(uri: any): Promise<string> {
   if (!asset.localUri) {
     await asset.downloadAsync();
   }
-  let resolved = asset.localUri ?? asset.uri;
+  const resolved = asset.localUri ?? asset.uri;
 
   if (!resolved) {
     throw new Error('resolveLocalUri: ماكو مسار صورة صالح بعد التحميل');
   }
 
-  // نتأكد المسار فعلاً بصيغة file:// - لو لا (مثلاً مسار أصل داخلي أو رابط
-  // مو مدعوم)، ننسخه يدوياً لمسار مضمون بمجلد الكاش
-  if (!resolved.startsWith('file://')) {
-    const filename = resolved.split('/').pop()?.split('?')[0] || `wallpaper_${Date.now()}.jpg`;
-    const destination = `${FileSystem.cacheDirectory}${filename}`;
-    await FileSystem.copyAsync({ from: resolved, to: destination });
-    resolved = destination;
-  }
-
-  return resolved;
+  // ⚠️ الإصلاح الجوهري لخطأ [ERR_ASSET_FILE] "Could not get the file's
+  // extension": الفحص القديم كان يتحقق بس من "startsWith('file://')" ويتخطى
+  // النسخ لو كان صحيح. المشكلة: أحياناً asset.localUri يبدأ فعلاً بـfile://
+  // لكن اسم الملف نفسه بدون امتداد صالح بنهايته (أو فيه معاملات إضافية بعد
+  // الاسم) - فيتمرر المسار المعطوب مباشرة لـMediaLibrary.createAssetAsync
+  // وينكسر بالضبط بهذا الخطأ. الحل: ننسخ الصورة دائماً (بدون شرط) لمسار كاش
+  // جديد باسم مبني يدوياً من asset.type (توفرها expo-asset دائماً، مثلاً
+  // "jpg") - فيضمن امتداد صحيح 100% بغض النظر شنو رجّعت asset.localUri.
+  const ext = (asset.type || 'jpg').replace(/^\./, '');
+  const destination = `${FileSystem.cacheDirectory}wallpaper_${Date.now()}.${ext}`;
+  await FileSystem.copyAsync({ from: resolved, to: destination });
+  return destination;
 }
 
 // يحول أي خطأ ملتقط لنص مختصر مفهوم - نعرضه مباشرة بالتنبيه على الشاشة نفسها

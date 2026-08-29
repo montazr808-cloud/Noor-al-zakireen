@@ -22,6 +22,7 @@
       }
     },
     "android": {
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/adaptive-icon.png",
         "backgroundColor": "#4586BE"
@@ -83,6 +84,8 @@
           "color": "#4586BE"
         }
       ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging",
       "./plugins/withNotificationIcons.js"
     ],
     "extra": {

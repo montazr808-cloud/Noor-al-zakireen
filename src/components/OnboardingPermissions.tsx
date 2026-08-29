@@ -23,6 +23,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  getManufacturerInstructions,
+  openManufacturerAutostartSettings,
+  requestIgnoreBatteryOptimizations,
+} from '@/utils/batteryOptimization';
 import { getExactAlarmPermissionStatus, openExactAlarmSettings, openOverlayPermissionSettings } from '@/utils/notifeeAzan';
 
 export const ONBOARDING_DONE_KEY = '@onboarding_permissions_done_v1';
@@ -39,7 +44,7 @@ const NEON_RGB = '0,229,255';
 
 type PermStatus = 'idle' | 'granted' | 'denied' | 'unsupported';
 
-type PermKey = 'location' | 'notifications' | 'microphone' | 'alarm' | 'overlay';
+type PermKey = 'location' | 'notifications' | 'microphone' | 'alarm' | 'overlay' | 'battery';
 
 type PermDef = {
   key: PermKey;
@@ -84,6 +89,13 @@ const PERMISSIONS: PermDef[] = [
     title: 'الظهور فوق التطبيقات',
     desc: 'ليظهر تنبيه الأذان حتى أثناء استخدام تطبيق آخر',
     actionLabel: 'فتح الإعدادات',
+  },
+  {
+    key: 'battery',
+    icon: 'battery-charging-outline',
+    title: 'توفير الطاقة',
+    desc: 'أهم خطوة ليصلك الأذان حتى لو التطبيق مقفول أياماً - بدونها قد يوقف نظام هاتفك التطبيق بصمت',
+    actionLabel: 'سماح',
   },
 ];
 
@@ -138,8 +150,14 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
     microphone: 'idle',
     alarm: 'idle',
     overlay: 'idle',
+    battery: 'idle',
   });
   const [busyKey, setBusyKey] = useState<PermKey | null>(null);
+  // تعليمات نصية مخصصة حسب الشركة المصنّعة لهاتف المستخدم - محسوبة مرة
+  // وحدة عند فتح الشاشة (Device.brand/manufacturer ثابتة طول الجلسة)
+  const [manufacturerInfo] = useState(() => getManufacturerInstructions());
+  const hasAutostartScreen =
+    manufacturerInfo.manufacturer !== 'other' && manufacturerInfo.manufacturer !== 'samsung';
 
   const fadeIn = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -188,6 +206,13 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
         // ماكو فحص برمجي متاح لهذي الصلاحية (قيد حقيقي بأندرويد) - نعتبرها
         // "تفاعل معها" بس، مو نتحقق من نتيجتها فعلياً
         setStatuses((prev) => ({ ...prev, overlay: 'granted' }));
+      } else if (key === 'battery') {
+        // أهم صلاحية للهدف الحالي (وصول الأذان حتى لو التطبيق مقفول أياماً) -
+        // نافذة النظام القياسية لاستثناء تحسين البطارية. ماكو فحص برمجي
+        // موثوق متاح بدون native module إضافي، فنعتبرها "تفاعل معها" بس،
+        // نفس مبدأ overlay فوگ بالضبط
+        await requestIgnoreBatteryOptimizations();
+        setStatuses((prev) => ({ ...prev, battery: 'granted' }));
       }
     } finally {
       setBusyKey(null);
@@ -272,6 +297,21 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
                 <Text style={styles.helpText}>
                   بعد فتح الإعدادات: ابحث عن اسم التطبيق، ثم فعّل الخيار يدوياً من الشاشة
                 </Text>
+              )}
+
+              {p.key === 'battery' && (
+                <>
+                  <Text style={styles.helpText}>{manufacturerInfo.text}</Text>
+                  {hasAutostartScreen && (
+                    <TouchableOpacity
+                      onPress={() => openManufacturerAutostartSettings()}
+                      activeOpacity={0.7}
+                      style={styles.secondaryLinkWrap}
+                    >
+                      <Text style={styles.secondaryLink}>فتح إعدادات "التشغيل التلقائي" الخاصة بجهازك</Text>
+                    </TouchableOpacity>
+                  )}
+                </>
               )}
             </View>
           );
@@ -379,6 +419,14 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     lineHeight: 16,
     paddingHorizontal: 6,
+  },
+  secondaryLinkWrap: { paddingHorizontal: 6, marginTop: 2 },
+  secondaryLink: {
+    color: C.neon,
+    fontSize: 11.5,
+    fontWeight: '700',
+    textAlign: 'right',
+    textDecorationLine: 'underline',
   },
 
   footer: { marginTop: 'auto', paddingBottom: 18, paddingTop: 20 },

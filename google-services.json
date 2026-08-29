@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "976213501190",
+    "project_id": "noor-alzakireen",
+    "storage_bucket": "noor-alzakireen.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:976213501190:android:b35d700e7b9fdb37e36a87",
+        "android_client_info": {
+          "package_name": "com.anonymous.nooralzakireen"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyALsB5qip4iPGPHU0Erq9h9z9riapeIdfM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

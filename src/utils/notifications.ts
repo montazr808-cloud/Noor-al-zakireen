@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { Alert, Platform } from 'react-native';
 
+import { ensureBatteryOptimizationExemption } from './batteryOptimization';
 import {
   getHijriNotifPrefs,
   refreshHijriNotificationsIfNeeded,
@@ -26,6 +27,11 @@ import {
   type Coordinates,
 } from './notificationScheduler';
 import { getPrayerTimes } from './prayerCalc';
+// ⚠️ إضافة سيرفر الدفع (noor-server، Cloudflare Worker + FCM): يرسل توكن
+// الجهاز + إحداثياته + تفعيل/تعطيل كل صلاة، حتى يوصل أذان حقيقي عبر Push
+// حتى لو التطبيق مقفول تماماً من أيام - يعمل كطبقة إضافية فوق الجدولة
+// المحلية الموجودة (notifeeAzan.ts)، ما يلغيها ولا يعتمد عليها.
+import { registerForPushNotifications } from './pushRegistration';
 import { scheduleVerseNotifications } from './verseNotifications';
 
 // نفس المفتاح بالضبط المستخدم بـ app/settings/prayer-times.tsx لحفظ تفعيل/تعطيل
@@ -115,6 +121,9 @@ export async function initializeAppNotifications(settings: Partial<FullNotificat
   // ⚠️ جزء ٢ من إصلاح ثبات الإشعارات - نتحقق/نطلب صلاحية المنبهات الدقيقة
   // قبل أي جدولة، حتى alarmManager يشتغل فعلياً على هذا الجهاز
   await ensureExactAlarmPermission();
+  // ⚠️ تذكير منفصل بغض النظر متى المستخدم خلّص onboarding - شوف الشرح الكامل
+  // بملف batteryOptimization.ts (نفس مبدأ ensureExactAlarmPermission فوگ)
+  await ensureBatteryOptimizationExemption();
 
   let coords = settings.coords;
 
@@ -160,12 +169,21 @@ export async function initializeAppNotifications(settings: Partial<FullNotificat
           // تجاهل، نرجع للافتراضي بالأسفل
         }
       }
-      azanCount = await scheduleAzanNotifications(
-        times,
-        azanEnabled ?? { fajr: true, dhuhr: true, asr: true, maghrib: true, isha: true },
-        coords
-      );
+      const resolvedAzanEnabled = azanEnabled ?? { fajr: true, dhuhr: true, asr: true, maghrib: true, isha: true };
+      azanCount = await scheduleAzanNotifications(times, resolvedAzanEnabled, coords);
       await scheduleNextPrayerNotifications(times);
+
+      // ⚠️ تسجيل الجهاز بسيرفر الدفع (noor-server) - يرسل توكن FCM +
+      // الإحداثيات + تفعيل كل صلاة، حتى يقدر السيرفر يرسل أذان Push حقيقي
+      // بالضبط بوقته حتى لو التطبيق مقفول تماماً. لا يوقف باقي الجدولة
+      // المحلية لو فشل (شبكة، إلخ) - مصمم يفشل بصمت ويعيد المحاولة بفتحة
+      // تطبيق جاية.
+      registerForPushNotifications({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        azanEnabled: resolvedAzanEnabled,
+      }).catch(() => {});
+
       verseCount = await scheduleVerseNotifications(times);
     } catch {
       // فشل حساب أوقات الصلاة - نتجاوز جدولة الأذان والآيات بس ونكمل الباقي
