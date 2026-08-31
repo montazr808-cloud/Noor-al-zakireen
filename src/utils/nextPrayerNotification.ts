@@ -125,7 +125,7 @@ export async function displayCurrentPrayerNotification(times: PrayerTimesInput):
       android: {
         channelId: CHANNEL_ID,
         colorized: true,
-        color: '#2E6DA4',
+        color: '#0E3B4D',
         smallIcon: 'ic_notification',
         largeIcon: 'ic_notification_large',
         ongoing: true,
@@ -191,13 +191,21 @@ export async function scheduleNextPrayerNotifications(times: PrayerTimesInput): 
     try {
       const id = await notifee.createTriggerNotification(
         {
+          // ⚠️ إصلاح تراكم الإشعارات: بدون id ثابت، notifee يعتبر كل صلاة
+          // "تشتغل" (يوصل وقتها) إشعار جديد تماماً بدل ما يحدّث الإشعار
+          // الموجود بمكانه - وبما إن ongoing:true/autoCancel:false، الإشعار
+          // القديم يضل عالق للأبد. نفس id بالضبط اللي تستخدمه
+          // displayCurrentPrayerNotification يخلي الاثنين (العرض الفوري عند
+          // فتح التطبيق + التحديث التلقائي بكل صلاة) يتشاركون نفس "المكان"
+          // بالضبط، فيصير إشعار واحد يتحدث بمكانه، مو نسخ متراكمة
+          id: CURRENT_STATUS_NOTIF_ID,
           title,
           body,
           data: { screen: 'home' },
           android: {
             channelId: CHANNEL_ID,
             colorized: true,
-            color: '#2E6DA4',
+            color: '#0E3B4D',
             smallIcon: 'ic_notification',
             largeIcon: 'ic_notification_large',
             ongoing: true,
@@ -227,14 +235,59 @@ export async function scheduleNextPrayerNotifications(times: PrayerTimesInput): 
 }
 
 // ===== التوجيه: يفتح المكان الصحيح حسب الزر/الجسم اللي ضغط عليه المستخدم =====
-function handlePress(actionId: string | undefined) {
-  if (actionId === OPEN_PRAYER_TIMES_ACTION) {
-    router.push('/settings/prayer-times' as any);
-  } else if (actionId === OPEN_TASBIH_ACTION) {
-    router.push('/tasbih' as any);
-  } else {
-    router.push('/' as any); // ضغطة الجسم العادية -> الرئيسية
+//
+// ⚠️ إصلاح جوهري ("الزرين ما يشتغلون، التطبيق يبقى صافن"): لما التطبيق مقفول
+// أو بالخلفية والمستخدم يضغط أحد زرين الإشعار (أوقات الصلاة/التسبيح - مو
+// جسم الإشعار نفسه)، notifee يعالج الحدث بسياق JavaScript منفصل تماماً
+// (Headless) عن التطبيق الفعلي - فـ router.push() هنا يشتغل "بالفراغ" وما
+// يوصل لأي واجهة حقيقية. (جسم الإشعار يشتغل "صدفة" لأن أندرويد نفسه يفتح
+// التطبيق تلقائياً بأي ضغطة عادية، بغض النظر هل كودنا نجح أو لا - هذا سلوك
+// نظام، مو نجاح فعلي من التنقل).
+//
+// الحل: نخزن الوجهة المطلوبة بمكان دائم (AsyncStorage) بدل الاعتماد على
+// router مباشرة، وبعد ما يفتح التطبيق فعلياً ويكتمل تحميله (بـ_layout.tsx)،
+// نتحقق من هذا المخزن وننفذ التنقل حينها - نفس مبدأ "رسالة بالبريد" بدل
+// محاولة اتصال مباشر بسياق ميت.
+const PENDING_NAV_KEY = 'noor_pendingNextPrayerNav';
+
+async function setPendingNavigation(path: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(PENDING_NAV_KEY, path);
+  } catch {
+    // تجاهل - أسوأ حالة الزر ما يودي لمكان، بس التطبيق يفتح عادي
   }
+}
+
+/**
+ * تستدعى من app/_layout.tsx بعد اكتمال تحميل التطبيق - تتحقق هل فيه تنقل
+ * معلّق من ضغطة زر إشعار سابقة، تنفذه، وتمسحه حتى ما يتكرر بفتحات لاحقة.
+ */
+export async function consumePendingNextPrayerNavigation(): Promise<string | null> {
+  try {
+    const path = await AsyncStorage.getItem(PENDING_NAV_KEY);
+    if (path) await AsyncStorage.removeItem(PENDING_NAV_KEY);
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+function handlePress(actionId: string | undefined) {
+  let path = '/';
+  if (actionId === OPEN_PRAYER_TIMES_ACTION) {
+    path = '/settings/prayer-times';
+  } else if (actionId === OPEN_TASBIH_ACTION) {
+    path = '/tasbih';
+  }
+
+  // نحاول التنقل المباشر فوراً (يشتغل صح لو التطبيق أصلاً بالمقدمة/الواجهة
+  // شغالة) + نخزنه احتياطياً بكل الأحوال (يغطي حالة السياق المنفصل فوگ)
+  try {
+    router.push(path as any);
+  } catch {
+    // تجاهل - التخزين بالأسفل يبقى خط الدفاع الأكيد
+  }
+  setPendingNavigation(path).catch(() => {});
 }
 
 // ===== معالجة الحدث - دالة نقية بدون تسجيل ذاتي (شوف نفس الملاحظة بملف

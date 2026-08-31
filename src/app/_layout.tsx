@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 import { useFonts } from 'expo-font';
-import { Tabs } from 'expo-router';
+import { router, Tabs } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ColorValue, LogBox, Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -94,6 +94,20 @@ export default function Layout() {
     import('@/utils/hijriSync').then(({ loadCachedOffset, syncNajafOffset }) => {
       loadCachedOffset().then(() => {
         syncNajafOffset().catch(() => {});
+      });
+    });
+  }, []);
+
+  // ⚠️ إصلاح ("الزرين يبقون صافنين"): لما المستخدم يضغط زر بإشعار "الصلاة
+  // القادمة" (أوقات الصلاة/التسبيح) والتطبيق مقفول أو بالخلفية، notifee
+  // يعالج الحدث بسياق JavaScript منفصل (Headless) عن التطبيق الفعلي، فأي
+  // router.push() هناك يروح بالفراغ. الحل: nextPrayerNotification.ts يخزن
+  // الوجهة المطلوبة بـAsyncStorage وقت الضغطة، وهنا - بعد ما يكتمل تحميل
+  // التطبيق فعلياً - نتحقق من هذا المخزن وننفذ التنقل الحقيقي.
+  useEffect(() => {
+    import('@/utils/nextPrayerNotification').then(({ consumePendingNextPrayerNavigation }) => {
+      consumePendingNextPrayerNavigation().then((path) => {
+        if (path) router.push(path as any);
       });
     });
   }, []);

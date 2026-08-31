@@ -7,9 +7,10 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   Dimensions,
   FlatList,
   Modal,
@@ -145,11 +146,33 @@ export default function PhoneWallpapersScreen() {
   const [selected, setSelected] = useState<WallpaperItem | null>(null);
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
 
+  // بطاقة "تم الحفظ" — توست زجاجي متناسق مع تصميم التطبيق بدل Alert نظام
+  const [toastShow, setToastShow] = useState(false);
+  const [toastTitle, setToastTitle] = useState('');
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     AsyncStorage.getItem(LIKES_KEY).then(raw => {
       if (raw) setLikedIds(new Set(JSON.parse(raw)));
     });
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
   }, []);
+
+  const showSavedToast = (title: string) => {
+    setToastTitle(title);
+    setToastShow(true);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastAnim.stopAnimation();
+    Animated.timing(toastAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    toastTimer.current = setTimeout(() => {
+      Animated.timing(toastAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(({ finished }) => {
+        if (finished) setToastShow(false);
+      });
+    }, 2000);
+  };
 
   const toggleLike = async (id: string) => {
     const next = new Set(likedIds);
@@ -226,7 +249,7 @@ export default function PhoneWallpapersScreen() {
         await MediaLibrary.createAlbumAsync('نور الذاكرين', asset, false);
       }
 
-      Alert.alert('تم الحفظ ✓', `تم حفظ "${item.title}" في معرض الصور`);
+      showSavedToast(item.title);
     } catch (err) {
       console.log('saveToGallery error:', err);
       Alert.alert('خطأ بالحفظ', describeError(err));
@@ -240,6 +263,31 @@ export default function PhoneWallpapersScreen() {
       <View style={s.bgGlow1} />
       <View style={s.bgGlow2} />
       <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFill} pointerEvents="none" />
+
+      {toastShow && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            s.toast,
+            {
+              opacity: toastAnim,
+              transform: [
+                { translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [-16, 0] }) },
+              ],
+            },
+          ]}
+        >
+          <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+          <View style={s.toastGlass} />
+          <View style={s.toastIconWrap}>
+            <Ionicons name="checkmark" size={16} color="#10b981" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.toastTitle}>تم الحفظ</Text>
+            <Text style={s.toastSubtitle} numberOfLines={1}>{toastTitle}</Text>
+          </View>
+        </Animated.View>
+      )}
 
       <View style={s.header}>
         <TouchableOpacity onPress={() => router.replace('/settings')} style={s.backBtn}>
@@ -399,4 +447,20 @@ const s = StyleSheet.create({
     width: 44, height: 44,
     justifyContent: 'center', alignItems: 'center',
   },
+
+  toast: {
+    position: 'absolute', top: 12, left: 16, right: 16, zIndex: 999,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    borderRadius: 16, overflow: 'hidden',
+    borderWidth: 1, borderColor: C.glassBorder,
+    paddingHorizontal: 14, paddingVertical: 12,
+  },
+  toastGlass: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(255,255,255,0.06)' },
+  toastIconWrap: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: 'rgba(16,185,129,0.15)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  toastTitle: { color: C.white, fontSize: 13, fontWeight: '800' },
+  toastSubtitle: { color: C.muted, fontSize: 11, fontWeight: '600', marginTop: 1 },
 });
