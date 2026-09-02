@@ -86,7 +86,9 @@
       ],
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
-      "./plugins/withNotificationIcons.js"
+      "./plugins/withNotificationIcons.js",
+      "expo-splash-screen",
+      "expo-status-bar"
     ],
     "extra": {
       "router": {},
