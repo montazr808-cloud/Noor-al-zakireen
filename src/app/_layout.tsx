@@ -6,7 +6,7 @@ import { BlurView } from 'expo-blur';
 import { useFonts } from 'expo-font';
 import { router, Tabs } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ColorValue, LogBox, Platform, StyleSheet } from 'react-native';
+import { AppState, ColorValue, LogBox, Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 LogBox.ignoreAllLogs(true);
@@ -98,18 +98,31 @@ export default function Layout() {
     });
   }, []);
 
-  // ⚠️ إصلاح ("الزرين يبقون صافنين"): لما المستخدم يضغط زر بإشعار "الصلاة
-  // القادمة" (أوقات الصلاة/التسبيح) والتطبيق مقفول أو بالخلفية، notifee
-  // يعالج الحدث بسياق JavaScript منفصل (Headless) عن التطبيق الفعلي، فأي
-  // router.push() هناك يروح بالفراغ. الحل: nextPrayerNotification.ts يخزن
-  // الوجهة المطلوبة بـAsyncStorage وقت الضغطة، وهنا - بعد ما يكتمل تحميل
-  // التطبيق فعلياً - نتحقق من هذا المخزن وننفذ التنقل الحقيقي.
+  // ⚠️ إصلاح ("الزرين يبقون صافنين" - جزء ٢، ٢٠٢٦-٠٩-٠٢): الجزء الأساسي من
+  // هذا البگ انحل بإضافة launchActivity لأزرار الإشعار (nextPrayerNotification.ts)،
+  // بس بقى ثغرة ثانوية هنا: فحص التنقل المعلّق (consumePendingNextPrayerNavigation)
+  // كان يصير مرة وحدة بس - أول ما يفتح _layout.tsx (useEffect بدون تبعيات).
+  // لو التطبيق أصلاً كان شغال بالخلفية (مو مقفول من زمان) والمستخدم ضغط زر
+  // الإشعار، هذا الفحص الأولي يكون خلص من زمان ولا ينعاد - فأي تنقل معلّق
+  // خزّن بهذي اللحظة بالضبط يضل عالق لين المستخدم يقفل ويفتح التطبيق من
+  // جديد بالكامل. الحل: نعيد نفس الفحص كل ما يرجع التطبيق للواجهة (AppState
+  // يتحول لـ'active')، مو بس أول فتحة.
   useEffect(() => {
-    import('@/utils/nextPrayerNotification').then(({ consumePendingNextPrayerNavigation }) => {
-      consumePendingNextPrayerNavigation().then((path) => {
-        if (path) router.push(path as any);
+    const checkPendingNextPrayerNav = () => {
+      import('@/utils/nextPrayerNotification').then(({ consumePendingNextPrayerNavigation }) => {
+        consumePendingNextPrayerNavigation().then((path) => {
+          if (path) router.push(path as any);
+        });
       });
+    };
+
+    checkPendingNextPrayerNav(); // أول فتحة تطبيق
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') checkPendingNextPrayerNav();
     });
+
+    return () => subscription.remove();
   }, []);
 
   // ===== شاشة الترحيب/الصلاحيات - تطلع مرة وحدة بس بأول فتحة تطبيق =====
