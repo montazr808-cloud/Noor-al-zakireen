@@ -111,23 +111,31 @@ export function getManufacturerInstructions(): { manufacturer: ManufacturerKey; 
   return { manufacturer, text: MANUFACTURER_INSTRUCTIONS[manufacturer] };
 }
 
-// ===== 3. تذكير للمستخدمين الحاليين اللي خلّصوا onboarding قبل هذا التحديث =====
-// ⚠️ مهم: OnboardingPermissions.tsx تطلع مرة وحدة بس بعمر التطبيق (مفتاح
-// ONBOARDING_DONE_KEY دائم). يعني أي مستخدم ثبّت نسخة سابقة وخلّص منها،
-// ما راح يشوف بطاقة "توفير الطاقة" الجديدة إطلاقاً حتى لو حدّثنا الكود -
-// هذا بالضبط نفس مبدأ ensureExactAlarmPermission بملف notifications.ts
-// (مفتاح تنبيه منفصل خاص فيها، يشتغل لكل المستخدمين بغض النظر متى نصبوا
-// التطبيق أو أكملوا onboarding)
+// ===== 3. تذكير للمستخدمين - يتكرر كل فترة، مو مرة وحدة بعمر التطبيق =====
+// ⚠️ إصلاح (٢٠٢٦-٠٩-٠٢، "الأذان يوصل متقطع - أحياناً يشتغل وأحياناً لا"):
+// كان هذا التذكير يصير مرة وحدة بس بعمر التثبيت (BATTERY_PROMPTED_KEY بولياني
+// دائم). المشكلة: أندرويد على أغلب الأجهزة (خصوصاً هواوي/شاومي وحتى بيكسل
+// بنسخ حديثة) يعيد فرض قيود "توفير الطاقة" تلقائياً وبصمت على أي تطبيق ما
+// يفتحه المستخدم يدوياً لفترة (ميزة "Unused apps" / "Manage apps if unused") -
+// حتى لو كان المستخدم وافق سابقاً على الاستثناء. يعني موافقة قديمة وحدة ما
+// تضمن الاستثناء يضل فعّال للأبد. هسه التذكير يتكرر كل ١٠ أيام (نفس مبدأ
+// hijriSync.ts/hijriNotifications.ts بالتجديد الدوري) بدل ما يوقف نهائياً
+// بعد أول موافقة - فلو النظام رجع يقيّد التطبيق بصمت، المستخدم يشوف تذكير
+// جديد ويقدر يفعّل الاستثناء من جديد قبل ما يفوّت أذان.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BATTERY_PROMPTED_KEY = '@battery_optimization_prompted_v1';
+const BATTERY_PROMPTED_AT_KEY = '@battery_optimization_prompted_at_v1';
+const BATTERY_REPROMPT_DAYS = 10;
 
 export async function ensureBatteryOptimizationExemption(): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
-    const alreadyPrompted = await AsyncStorage.getItem(BATTERY_PROMPTED_KEY);
-    if (alreadyPrompted === 'true') return;
-    await AsyncStorage.setItem(BATTERY_PROMPTED_KEY, 'true');
+    const lastPromptedRaw = await AsyncStorage.getItem(BATTERY_PROMPTED_AT_KEY);
+    if (lastPromptedRaw) {
+      const daysSince = (Date.now() - new Date(lastPromptedRaw).getTime()) / (1000 * 60 * 60 * 24);
+      if (daysSince < BATTERY_REPROMPT_DAYS) return; // عرضناها مؤخراً - ما نزعج المستخدم بتكرار قريب
+    }
+    await AsyncStorage.setItem(BATTERY_PROMPTED_AT_KEY, new Date().toISOString());
 
     const { text } = getManufacturerInstructions();
     Alert.alert(

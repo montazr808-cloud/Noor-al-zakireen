@@ -104,8 +104,14 @@ export async function openExactAlarmSettings(): Promise<void> {
 // ⚠️ محدودية حقيقية: أندرويد ما يعطي أي طريقة برمجية (بدون كتابة كود Native
 // إضافي خارج Expo) نتحقق فيها هل الصلاحية ممنوحة فعلاً أو لا (بعكس صلاحية
 // المنبه الدقيق اللي notifee توفر لها فحص جاهز). لهذا هذي الدالة تفتح شاشة
-// التفعيل مباشرة بس، بدون فحص مسبق - العرض يصير مرة وحدة بالجلسة بغض النظر
-// عن الحالة الفعلية.
+// التفعيل مباشرة بس، بدون فحص مسبق - التأكيد الفعلي صار مسؤولية المستخدم
+// نفسه من واجهة OnboardingPermissions.tsx (ضغطة ثانية صريحة).
+//
+// ⚠️ ملاحظة مهمة إذا هذي الدالة تفشل دايماً وتفتح إعدادات التطبيق العامة
+// بدل شاشة الصلاحية الحقيقية: السبب الأشيع هو أن مكتبة expo-intent-launcher
+// مو مركبة فعلياً بمشروعك (npx expo install expo-intent-launcher)، أو
+// مركبة بس التطبيق ما انبنى (rebuild) من جديد بعدها - هذي مكتبة native،
+// تحديثها بالكود وحده ما يكفي، لازم بلد جديد (EAS build) يشملها.
 const ANDROID_PACKAGE_ID = 'com.anonymous.nooralzakireen'; // ⚠️ لازم يطابق app.json → expo.android.package بالضبط
 
 export async function openOverlayPermissionSettings(): Promise<void> {
@@ -118,12 +124,12 @@ export async function openOverlayPermissionSettings(): Promise<void> {
       { data: `package:${ANDROID_PACKAGE_ID}` }
     );
   } catch (e) {
-    // ⚠️ إصلاح: كان الفشل هنا يطبع بـ console.log بس - بنسخة APK منصّبة
-    // عادي، المستخدم ما يشوف الكونسول إطلاقاً، فيدوس الزر ويحس "ماكو شي
-    // صار" بدون أي تفسير. أشيع سبب: مكتبة expo-intent-launcher مو مثبتة
-    // فعلاً بالمشروع (npm/yarn) رغم إن الكود يستخدمها - نطلع تنبيه مرئي
-    // حقيقي بدل ما نخفي الفشل بصمت
-    console.log('[notifeeAzan] فشل فتح شاشة صلاحية الظهور فوق التطبيقات:', e);
+    // ⚠️ كان الفشل هنا يطبع بـ console.log بس - بنسخة APK منصّبة عادي،
+    // المستخدم ما يشوف الكونسول إطلاقاً، فيدوس الزر ويحس "ماكو شي صار" بدون
+    // أي تفسير. أشيع سبب: مكتبة expo-intent-launcher مو مثبتة فعلاً بالمشروع
+    // (أو مو مبنية ضمن آخر EAS build) رغم إن الكود يستخدمها - نطلع تنبيه
+    // مرئي حقيقي بدل ما نخفي الفشل بصمت
+    console.log('[notifeeAzan] فشل فتح شاشة صلاحية الظهور فوق التطبيقات (تأكد expo-intent-launcher مركّبة ومبنية ضمن آخر build):', e);
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { Alert, Linking } = require('react-native');
@@ -167,10 +173,23 @@ async function startAzanPlayback() {
 
     const additionalVoiceFiles: Record<string, string> = rawAdditional ? JSON.parse(rawAdditional) : {};
     const customVoices: CustomVoice[] = rawCustom ? JSON.parse(rawCustom) : [];
-    const source = resolveVoiceSource(voiceId ?? DEFAULT_VOICE_ID, additionalVoiceFiles, customVoices);
+    let source = resolveVoiceSource(voiceId ?? DEFAULT_VOICE_ID, additionalVoiceFiles, customVoices);
+
+    // ⚠️ إصلاح (٢٠٢٦-٠٩-٠٢، "الأذان يوصل بصمت بدون صوت أحياناً"): لو الصوت
+    // المختار (خصوصاً صوت مستورد/مخصص) ما انلقى ملفه لأي سبب (حذف يدوي،
+    // مسار كاش انمسح، إلخ)، كان الكود يوقف الخدمة فوراً بصمت تام - يطلع
+    // تنبيه الأذان بدون أي صوت إطلاقاً وبدون أي أثر واضح يفسر السبب. هسه
+    // نرجع تلقائياً لصوت المؤذن الافتراضي (مرفوع فعلياً جوة التطبيق، ما
+    // يعتمد على ملف مستورد ممكن يفقد) بدل الاستسلام - الأذان يوصل بصوت
+    // حتى لو الصوت المخصص المختار صار فيه مشكلة.
+    if (!source) {
+      console.log('[notifeeAzan] الصوت المختار غير متاح، نرجع للصوت الافتراضي');
+      source = resolveVoiceSource(DEFAULT_VOICE_ID, {}, []);
+    }
 
     if (!source) {
-      // ماكو صوت صالح - نوقف الخدمة فوراً بدل ما تضل معلقة بدون فايدة
+      // حتى الصوت الافتراضي ما انلقى (حالة غير متوقعة جداً) - نوقف الخدمة
+      // بدل ما تضل معلقة بدون فايدة
       resolveForegroundService?.();
       resolveForegroundService = null;
       return;
@@ -221,10 +240,9 @@ export function stopAzanPlayback() {
 // ===== معالجة الحدث - دالة نقية بدون أي تسجيل ذاتي بـ notifee =====
 // السبب: notifee.onForegroundEvent/onBackgroundEvent لازم تنسجل *مرة وحدة
 // بس بكل التطبيق* (موثّق رسمياً) - لو انسجلت أكثر من مرة من ملفات مختلفة،
-// بس آخر تسجيل يشتغل فعلياً والباقي ينمسحون بصمت. لهذا صار عندنا مشكلة:
-// الضغط على إشعار الأذان كان يوديك للتقويم (لأن ملف hijriNotifications كان
-// آخر وحدة مسجلة). الحل: هذا الملف يصدّر بس دالة "شنو أسوي لو الحدث يخصني"
-// - التسجيل الفعلي الوحيد صار بملف notificationEvents.ts المركزي.
+// بس آخر تسجيل يشتغل فعلياً والباقي ينمسحون بصمت. لهذا هذا الملف يصدّر بس
+// دالة "شنو أسوي لو الحدث يخصني" - التسجيل الفعلي الوحيد صار بملف
+// notificationEvents.ts المركزي.
 import { router } from 'expo-router';
 
 export function handleAzanEvent(type: any, detail: any, EventType: any): boolean {

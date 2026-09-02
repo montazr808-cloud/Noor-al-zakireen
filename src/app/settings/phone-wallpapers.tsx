@@ -5,6 +5,7 @@ import { Asset } from 'expo-asset';
 import { BlurView } from 'expo-blur';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useEffect, useRef, useState } from 'react';
@@ -82,12 +83,8 @@ const WALLPAPERS: WallpaperItem[] = [
 const CATEGORIES = ['الكل', 'مقدسات', 'روحانيات', 'طبيعة'];
 
 // expo-media-library غير مدعومة على الويب إطلاقاً، لذا نستوردها فقط على الموبايل
-// ⚠️ تعديل: نستورد من "expo-media-library/legacy" بدل "expo-media-library" مباشرة -
-// النسخة المركّبة بالمشروع (~56.0.10) صار فيها createAssetAsync بالمسار الجديد
-// deprecated (رسالة الخطأ الفعلية كانت: "Method createAssetAsync imported from
-// expo-media-library is deprecated. Import the legacy API from
-// expo-media-library/legacy..."). المسار legacy يوفر نفس الدوال (createAssetAsync,
-// requestPermissionsAsync, إلخ) بنفس التوقيع تماماً، بس بدون تحذير deprecated.
+// ⚠️ نستورد من "expo-media-library/legacy" بدل "expo-media-library" مباشرة -
+// النسخة المركّبة بالمشروع صار فيها createAssetAsync بالمسار الجديد deprecated.
 let MediaLibrary: typeof import('expo-media-library/legacy') | null = null;
 if (Platform.OS !== 'web') {
   MediaLibrary = require('expo-media-library/legacy');
@@ -97,11 +94,14 @@ if (Platform.OS !== 'web') {
 // حقيقي بنسخة الإنتاج (خصوصاً أندرويد) - MediaLibrary وSharing يحتاجون مسار
 // file:// حقيقي، فلازم ننزّل الصورة محلياً أول عبر expo-asset قبل أي عملية عليها
 //
-// ⚠️ تعديل: رسالة الخطأ الفعلية بالمشاركة كانت "expected scheme to be 'file',
-// got 'null'" - يعني asset.localUri/asset.uri ما رجعوا مسار file:// حقيقي رغم
-// إن الدالة ما رمت استثناء. نضيف الآن تحقق صريح من الـscheme، ولو مو file://
-// ننسخ الصورة يدوياً لمجلد الكاش المضمون عبر expo-file-system - هذا يضمن مسار
-// file:// صالح 100% بغض النظر شنو رجّعت expo-asset.
+// ⚠️ إصلاح (٢٠٢٦-٠٩-٠٢، "الصورة المحفوظة صايرة حيل وايكة/ثقيلة"): قبل، هذي
+// الدالة كانت تنسخ الملف الأصلي بدقته الكاملة كما هو للمعرض بدون أي تصغير أو
+// ضغط - يعني الصورة المحفوظة هي نفس ملف الخلفية الخام (أحياناً بأبعاد كبيرة
+// جداً لخلفية هاتف عادية). هسه نمرر الصورة عبر expo-image-manipulator: نصغّرها
+// لعرض أقصى ١٤٤٠px (يغطي حتى أعلى دقة شاشات الهواتف الحالية) ونضغطها بجودة
+// ٨٢٪ قبل الحفظ/المشاركة. لو الصورة الأصلية أصلاً أصغر من هذا العرض، ما نكبّرها.
+// ImageManipulator نفسه يرجع مسار file:// صالح بامتداد صحيح (jpg)، فيحل بنفس
+// الوقت مشكلة الامتداد اللي كانت محلولة سابقاً بالنسخ اليدوي.
 async function resolveLocalUri(uri: any): Promise<string> {
   const asset = Asset.fromModule(uri);
   if (!asset.localUri) {
@@ -113,18 +113,25 @@ async function resolveLocalUri(uri: any): Promise<string> {
     throw new Error('resolveLocalUri: ماكو مسار صورة صالح بعد التحميل');
   }
 
-  // ⚠️ الإصلاح الجوهري لخطأ [ERR_ASSET_FILE] "Could not get the file's
-  // extension": الفحص القديم كان يتحقق بس من "startsWith('file://')" ويتخطى
-  // النسخ لو كان صحيح. المشكلة: أحياناً asset.localUri يبدأ فعلاً بـfile://
-  // لكن اسم الملف نفسه بدون امتداد صالح بنهايته (أو فيه معاملات إضافية بعد
-  // الاسم) - فيتمرر المسار المعطوب مباشرة لـMediaLibrary.createAssetAsync
-  // وينكسر بالضبط بهذا الخطأ. الحل: ننسخ الصورة دائماً (بدون شرط) لمسار كاش
-  // جديد باسم مبني يدوياً من asset.type (توفرها expo-asset دائماً، مثلاً
-  // "jpg") - فيضمن امتداد صحيح 100% بغض النظر شنو رجّعت asset.localUri.
-  const ext = (asset.type || 'jpg').replace(/^\./, '');
-  const destination = `${FileSystem.cacheDirectory}wallpaper_${Date.now()}.${ext}`;
-  await FileSystem.copyAsync({ from: resolved, to: destination });
-  return destination;
+  const MAX_WIDTH = 1440;
+  const actions =
+    asset.width && asset.width > MAX_WIDTH ? [{ resize: { width: MAX_WIDTH } }] : [];
+
+  try {
+    const manipulated = await ImageManipulator.manipulateAsync(resolved, actions, {
+      compress: 0.82,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    return manipulated.uri;
+  } catch (e) {
+    // فشل التصغير (نادر) - نرجع للأسلوب القديم (نسخ الملف الأصلي كما هو) بدل
+    // ما نكسر الحفظ/المشاركة بالكامل بسبب ميزة تحسين الحجم فقط
+    console.log('[resolveLocalUri] فشل ImageManipulator، رجعنا للنسخ المباشر:', e);
+    const ext = (asset.type || 'jpg').replace(/^\./, '');
+    const destination = `${FileSystem.cacheDirectory}wallpaper_${Date.now()}.${ext}`;
+    await FileSystem.copyAsync({ from: resolved, to: destination });
+    return destination;
+  }
 }
 
 // يحول أي خطأ ملتقط لنص مختصر مفهوم - نعرضه مباشرة بالتنبيه على الشاشة نفسها
@@ -217,11 +224,6 @@ export default function PhoneWallpapersScreen() {
     // ⚠️ writeOnly=true: التطبيق يحتاج بس يضيف صور للمعرض، مو يقرأ صور المستخدم
     // الموجودة مسبقاً - هذا يطلب صلاحية أضيق (وأسهل موافقة) خصوصاً على أندرويد
     // ١٣+ حيث صلاحية القراءة الكاملة (READ_MEDIA_IMAGES) منفصلة وأصعب موافقة
-    //
-    // ⚠️ إصلاح: هذا الاستدعاء كان خارج أي try/catch - لو صار أي خطأ بلحظة طلب
-    // الصلاحية نفسها (مثلاً موديول native غير مربوط صح بعد تحديث)، الدالة كلها
-    // تنكسر بصمت تام: زر "حفظ" بس ما يسوي شي وما تطلع ولا رسالة خطأ للمستخدم -
-    // هذا كان يطابق تماماً بلاغ "الصور ما تنحفظ" بدون أي رسالة توضح السبب.
     let status: string;
     try {
       const result = await MediaLibrary.requestPermissionsAsync(true);

@@ -78,6 +78,17 @@ function buildNotificationContent(nextKey: PrayerKey, nextTimeLabel: string) {
   return { title: `صلاة ${nextTitle}`, body };
 }
 
+// ⚠️ إصلاح جوهري (٢٠٢٦-٠٩-٠٢، "زرين أوقات الصلاة/التسبيح بالإشعار ما
+// يشتغلون"): notifee.Android.PressAction يدعم خاصية launchActivity - بدونها،
+// ضغط زر فعل مخصص جوة الإشعار (بعكس ضغط جسم الإشعار نفسه) ما يفتح/يطلع
+// التطبيق تلقائياً على أندرويد (هذا سلوك نظام موثّق، مو تقصير بكودنا). يعني
+// handleNextPrayerEvent بالأسفل كان يشتغل فعلاً (router.push + تخزين احتياطي)
+// بس بسياق JS "ميت" بدون أي واجهة تنعرض للمستخدم - فيحس الزرين "ما يسوون
+// شي". إضافة launchActivity:'default' هنا تخلي أندرويد يفتح نشاط التطبيق
+// فعلياً أول ما يدوس المستخدم أي وحدة من الزرين، قبل حتى ما توصل معالجة
+// notifee للحدث.
+const pressActionWithLaunch = (id: string) => ({ id, launchActivity: 'default' as const });
+
 // ===== عرض فوري للحالة الحالية - يظهر مباشرة لحظة فتح التطبيق =====
 // ⚠️ إضافة: قبل هذا، الإشعار الثابت ما كان يبين إلا بلحظة دخول أول صلاة
 // *مستقبلية* بعد الجدولة (يعني لو المستخدم فتح التطبيق بمنتصف اليوم، ما
@@ -134,8 +145,8 @@ export async function displayCurrentPrayerNotification(times: PrayerTimesInput):
         category: AndroidCategory.ALARM,
         pressAction: { id: 'default' },
         actions: [
-          { title: 'أوقات الصلاة', pressAction: { id: OPEN_PRAYER_TIMES_ACTION } },
-          { title: 'التسبيح', pressAction: { id: OPEN_TASBIH_ACTION } },
+          { title: 'أوقات الصلاة', pressAction: pressActionWithLaunch(OPEN_PRAYER_TIMES_ACTION) },
+          { title: 'التسبيح', pressAction: pressActionWithLaunch(OPEN_TASBIH_ACTION) },
         ],
       },
     });
@@ -212,8 +223,8 @@ export async function scheduleNextPrayerNotifications(times: PrayerTimesInput): 
             autoCancel: false,
             pressAction: { id: 'default' },
             actions: [
-              { title: 'أوقات الصلاة', pressAction: { id: OPEN_PRAYER_TIMES_ACTION } },
-              { title: 'التسبيح', pressAction: { id: OPEN_TASBIH_ACTION } },
+              { title: 'أوقات الصلاة', pressAction: pressActionWithLaunch(OPEN_PRAYER_TIMES_ACTION) },
+              { title: 'التسبيح', pressAction: pressActionWithLaunch(OPEN_TASBIH_ACTION) },
             ],
           },
         },
@@ -242,7 +253,9 @@ export async function scheduleNextPrayerNotifications(times: PrayerTimesInput): 
 // (Headless) عن التطبيق الفعلي - فـ router.push() هنا يشتغل "بالفراغ" وما
 // يوصل لأي واجهة حقيقية. (جسم الإشعار يشتغل "صدفة" لأن أندرويد نفسه يفتح
 // التطبيق تلقائياً بأي ضغطة عادية، بغض النظر هل كودنا نجح أو لا - هذا سلوك
-// نظام، مو نجاح فعلي من التنقل).
+// نظام، مو نجاح فعلي من التنقل). launchActivity المضافة فوگ بزرين الفعل
+// تحل هذا الجزء (تجبر أندرويد يفتح التطبيق فعلياً)، لكن نبقي الحل الثاني
+// تحت (AsyncStorage) كخط دفاع إضافي لأي حالة توقيت نادرة.
 //
 // الحل: نخزن الوجهة المطلوبة بمكان دائم (AsyncStorage) بدل الاعتماد على
 // router مباشرة، وبعد ما يفتح التطبيق فعلياً ويكتمل تحميله (بـ_layout.tsx)،

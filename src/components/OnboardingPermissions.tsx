@@ -16,6 +16,7 @@ import {
   Animated,
   Image,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -153,6 +154,12 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
     battery: 'idle',
   });
   const [busyKey, setBusyKey] = useState<PermKey | null>(null);
+  // ⚠️ إصلاح (طلب صريح: بطاقة "الظهور فوق التطبيقات" كانت تنعلّم "تم" فوراً
+  // بمجرد الضغط، بدون أي تحقق حقيقي - أندرويد ما يعطي طريقة برمجية نتأكد
+  // فيها من هذي الصلاحية تحديداً). هسه أول ضغطة تفتح شاشة الإعدادات بس (زر
+  // "فتح الإعدادات")، وتتحول لزر "تم التفعيل ✓" - وبس بضغطة ثانية صريحة من
+  // المستخدم نفسه (بعد ما يرجع من الإعدادات ويتأكد بعينه) تنعلّم "تم" فعلاً.
+  const [overlayOpened, setOverlayOpened] = useState(false);
   // تعليمات نصية مخصصة حسب الشركة المصنّعة لهاتف المستخدم - محسوبة مرة
   // وحدة عند فتح الشاشة (Device.brand/manufacturer ثابتة طول الجلسة)
   const [manufacturerInfo] = useState(() => getManufacturerInstructions());
@@ -202,15 +209,20 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
         } catch {
           // تجاهل
         }
-        await openOverlayPermissionSettings();
-        // ماكو فحص برمجي متاح لهذي الصلاحية (قيد حقيقي بأندرويد) - نعتبرها
-        // "تفاعل معها" بس، مو نتحقق من نتيجتها فعلياً
-        setStatuses((prev) => ({ ...prev, overlay: 'granted' }));
+        if (!overlayOpened) {
+          // الضغطة الأولى: نفتح شاشة الإعدادات الحقيقية بس - ما نعلّم "تم"
+          // إطلاقاً هنا (هذا بالضبط الإصلاح المطلوب)
+          await openOverlayPermissionSettings();
+          setOverlayOpened(true);
+        } else {
+          // الضغطة الثانية (بعد ما رجع من الإعدادات وأكد بعينه إنه فعّلها) -
+          // هذا التأكيد الوحيد المتاح تقنياً لهذي الصلاحية بالذات
+          setStatuses((prev) => ({ ...prev, overlay: 'granted' }));
+        }
       } else if (key === 'battery') {
         // أهم صلاحية للهدف الحالي (وصول الأذان حتى لو التطبيق مقفول أياماً) -
         // نافذة النظام القياسية لاستثناء تحسين البطارية. ماكو فحص برمجي
-        // موثوق متاح بدون native module إضافي، فنعتبرها "تفاعل معها" بس،
-        // نفس مبدأ overlay فوگ بالضبط
+        // موثوق متاح بدون native module إضافي، فنعتبرها "تفاعل معها" بس
         await requestIgnoreBatteryOptimizations();
         setStatuses((prev) => ({ ...prev, battery: 'granted' }));
       }
@@ -241,82 +253,98 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
 
   return (
     <SafeAreaView style={styles.container}>
-      <Animated.View style={[styles.header, { opacity: fadeIn }]}>
-        <View style={styles.logoRing}>
-          <Image
-            source={require('../assets/logo.png')}
-            style={styles.logoImage}
-            resizeMode="contain"
-          />
-        </View>
-        <Text style={styles.title}>أهلاً بك في نور الذاكرين</Text>
-        <Text style={styles.subtitle}>
-          يرجى تفعيل الصلاحيات التالية لضمان عمل التطبيق بأفضل صورة
-        </Text>
-      </Animated.View>
+      {/* ⚠️ إصلاح ("زر متابعة يضيع تحت أزرار التنقل"): المحتوى (الهيدر + ٦
+          بطاقات صلاحيات + نصوص مساعدة) كان كلّه بـView عادي بدون سكرول -
+          على الشاشات الأقصر يتجاوز ارتفاع الشاشة ويدفع زر "متابعة" (اللي كان
+          مثبت بـmarginTop:'auto') تحت/متزاحم مع أزرار التنقل. هسه الهيدر
+          والبطاقات داخل ScrollView (يسكرل لو طال المحتوى)، وزر "متابعة" ثابت
+          بمكانه بالأسفل خارج السكرول - بمتناول اليد دائماً بغض النظر عن طول
+          القائمة أو حجم الشاشة. */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View style={[styles.header, { opacity: fadeIn }]}>
+          <View style={styles.logoRing}>
+            <Image
+              source={require('../assets/logo.png')}
+              style={styles.logoImage}
+              resizeMode="contain"
+            />
+          </View>
+          <Text style={styles.title}>أهلاً بك في نور الذاكرين</Text>
+          <Text style={styles.subtitle}>
+            يرجى تفعيل الصلاحيات التالية لضمان عمل التطبيق بأفضل صورة
+          </Text>
+        </Animated.View>
 
-      <View style={styles.list}>
-        {PERMISSIONS.map((p) => {
-          const status = statuses[p.key];
-          const isBusy = busyKey === p.key;
-          const isGranted = status === 'granted';
-          const isUnsupported = status === 'unsupported';
+        <View style={styles.list}>
+          {PERMISSIONS.map((p) => {
+            const status = statuses[p.key];
+            const isBusy = busyKey === p.key;
+            const isGranted = status === 'granted';
+            const isUnsupported = status === 'unsupported';
+            const isOverlayAwaitingConfirm = p.key === 'overlay' && overlayOpened && !isGranted;
 
-          return (
-            <View key={p.key} style={styles.cardWrap}>
-              <View style={styles.card}>
-                <View style={styles.cardIconWrap}>
-                  <Ionicons name={p.icon} size={20} color={C.neon} />
-                </View>
-                <View style={styles.cardTextWrap}>
-                  <Text style={styles.cardTitle}>{p.title}</Text>
-                  <Text style={styles.cardDesc}>{p.desc}</Text>
-                </View>
-
-                {isUnsupported ? (
-                  <Text style={styles.unsupportedText}>غير مطلوبة</Text>
-                ) : isGranted ? (
-                  <View style={styles.grantedBadge}>
-                    <Ionicons name="checkmark" size={16} color="#0d1f2d" />
+            return (
+              <View key={p.key} style={styles.cardWrap}>
+                <View style={styles.card}>
+                  <View style={styles.cardIconWrap}>
+                    <Ionicons name={p.icon} size={20} color={C.neon} />
                   </View>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.actionBtn}
-                    onPress={() => handlePress(p.key)}
-                    disabled={isBusy}
-                    activeOpacity={0.75}
-                  >
-                    <Text style={styles.actionBtnText}>
-                      {isBusy ? '...' : p.actionLabel}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
+                  <View style={styles.cardTextWrap}>
+                    <Text style={styles.cardTitle}>{p.title}</Text>
+                    <Text style={styles.cardDesc}>{p.desc}</Text>
+                  </View>
 
-              {p.key === 'overlay' && !isGranted && !isUnsupported && (
-                <Text style={styles.helpText}>
-                  بعد فتح الإعدادات: ابحث عن اسم التطبيق، ثم فعّل الخيار يدوياً من الشاشة
-                </Text>
-              )}
-
-              {p.key === 'battery' && (
-                <>
-                  <Text style={styles.helpText}>{manufacturerInfo.text}</Text>
-                  {hasAutostartScreen && (
+                  {isUnsupported ? (
+                    <Text style={styles.unsupportedText}>غير مطلوبة</Text>
+                  ) : isGranted ? (
+                    <View style={styles.grantedBadge}>
+                      <Ionicons name="checkmark" size={16} color="#0d1f2d" />
+                    </View>
+                  ) : (
                     <TouchableOpacity
-                      onPress={() => openManufacturerAutostartSettings()}
-                      activeOpacity={0.7}
-                      style={styles.secondaryLinkWrap}
+                      style={styles.actionBtn}
+                      onPress={() => handlePress(p.key)}
+                      disabled={isBusy}
+                      activeOpacity={0.75}
                     >
-                      <Text style={styles.secondaryLink}>فتح إعدادات "التشغيل التلقائي" الخاصة بجهازك</Text>
+                      <Text style={styles.actionBtnText}>
+                        {isBusy ? '...' : isOverlayAwaitingConfirm ? 'تم التفعيل ✓' : p.actionLabel}
+                      </Text>
                     </TouchableOpacity>
                   )}
-                </>
-              )}
-            </View>
-          );
-        })}
-      </View>
+                </View>
+
+                {p.key === 'overlay' && !isGranted && !isUnsupported && (
+                  <Text style={styles.helpText}>
+                    {overlayOpened
+                      ? 'بعد ما تفعّل الخيار من شاشة الإعدادات، ارجع هنا واضغط "تم التفعيل"'
+                      : 'بعد فتح الإعدادات: ابحث عن اسم التطبيق، ثم فعّل الخيار يدوياً من الشاشة'}
+                  </Text>
+                )}
+
+                {p.key === 'battery' && (
+                  <>
+                    <Text style={styles.helpText}>{manufacturerInfo.text}</Text>
+                    {hasAutostartScreen && (
+                      <TouchableOpacity
+                        onPress={() => openManufacturerAutostartSettings()}
+                        activeOpacity={0.7}
+                        style={styles.secondaryLinkWrap}
+                      >
+                        <Text style={styles.secondaryLink}>فتح إعدادات "التشغيل التلقائي" الخاصة بجهازك</Text>
+                      </TouchableOpacity>
+                    )}
+                  </>
+                )}
+              </View>
+            );
+          })}
+        </View>
+      </ScrollView>
 
       <View style={styles.footer}>
         <TouchableOpacity style={styles.continueBtn} onPress={finish} activeOpacity={0.85}>
@@ -332,6 +360,8 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg, paddingHorizontal: 20 },
+
+  scrollContent: { paddingBottom: 8 },
 
   header: { alignItems: 'center', marginTop: 28, marginBottom: 24 },
   logoRing: {
@@ -429,7 +459,7 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
 
-  footer: { marginTop: 'auto', paddingBottom: 18, paddingTop: 20 },
+  footer: { paddingBottom: 18, paddingTop: 14 },
   continueBtn: {
     backgroundColor: C.neon,
     borderRadius: 14,
