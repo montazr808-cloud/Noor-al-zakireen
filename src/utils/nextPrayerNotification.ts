@@ -27,11 +27,47 @@ const PRAYER_TITLES: Record<PrayerKey, string> = {
 
 const CHANNEL_ID = 'next-prayer-status';
 const NOTIF_IDS_KEY = 'noor_nextPrayerNotifIds';
-// معرّف ثابت لإشعار "الحالة الحالية" (displayCurrentPrayerNotification) -
-// يضمن التحديث بمكانه بدل تكرار نسخ جديدة بكل فتحة تطبيق
-const CURRENT_STATUS_NOTIF_ID = 'next-prayer-current-status';
 const OPEN_PRAYER_TIMES_ACTION = 'open-prayer-times';
 const OPEN_TASBIH_ACTION = 'open-tasbih';
+const OPEN_ATHKAR_ACTION = 'open-athkar';
+
+// رمز نصي مميز لكل صلاة - بديل عملي لـ"أيقونة مختلفة لكل صلاة" بدون الحاجة
+// لخمس صور PNG منفصلة تحتاج تبنى بأصول أندرويد الأصلية (drawable resources)
+// وrebuild كامل. الرمز يُدمج بعنوان الإشعار نفسه، فيبين فوراً بدون أي أصل جديد.
+const PRAYER_GLYPH: Record<PrayerKey, string> = {
+  fajr: '🌅', dhuhr: '☀️', asr: '🌤️', maghrib: '🌇', isha: '🌙',
+};
+
+// ⚠️ إصلاح جوهري (٢٠٢٦-٠٩-٠٣، "الإشعار ما يتحدث تلقائياً، يبقى متأخر
+// ساعات"): كان عندنا معرّف ثابت واحد (CURRENT_STATUS_NOTIF_ID) تستخدمه كل
+// الإشعارات الخمسة المجدولة (فجر/ظهر/عصر/مغرب/عشاء) بالحلقة تحت. المشكلة:
+// notifee يستخدم هذا المعرّف مو بس لعرض الإشعار، بل أيضاً كمفتاح لتخزين
+// المنبّه نفسه (Alarm) بنظام أندرويد - فكل استدعاء createTriggerNotification
+// جديد بنفس المعرّف يلغي ويستبدل المنبّه السابق كلياً، مو بس شكله المرئي.
+// النتيجة الفعلية: من أصل ٥ منبهات، بس آخر وحد بالحلقة (العشاء) يبقى مجدول
+// فعلياً، والباقي ينمحون لحظة الجدولة نفسها قبل حتى ما توصل الصلاة.
+//
+// الحل: معرّف منفصل ومستقل لكل صلاة (حتى ما تلغي منبهات بعض)، + دالة تنظيف
+// تلقائية تمسح أي إشعار صلاة ثانية ظاهر بلحظة ظهور إشعار جديد - فيبقى دايماً
+// إشعار واحد بس مرئي، بدون تكدس، وبدون إلغاء المنبهات الأربعة الثانية.
+const STATUS_ID_PREFIX = 'next-prayer-status-';
+const statusIdFor = (key: PrayerKey): string => `${STATUS_ID_PREFIX}${key}`;
+
+function getNotifeeForCleanup() {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require('@notifee/react-native').default as typeof import('@notifee/react-native').default;
+}
+
+// تمسح أي إشعار صلاة ظاهر حالياً غير الصلاة المحددة - تستدعى فوراً بعد أي
+// عرض/تحديث جديد (فتح تطبيق أو منبّه مجدول اشتغل) حتى يبقى إشعار واحد بس
+async function cancelOtherPrayerNotifications(exceptKey: PrayerKey): Promise<void> {
+  const notifee = getNotifeeForCleanup();
+  await Promise.all(
+    PRAYER_ORDER.filter((k) => k !== exceptKey).map((k) =>
+      notifee.cancelNotification(statusIdFor(k)).catch(() => {})
+    )
+  );
+}
 
 // نفس أسلوب notifeeAzan.ts - استيراد ديناميكي حتى الملف ما يكسر شي قبل تنصيب
 // @notifee/react-native + rebuild
@@ -68,14 +104,38 @@ function getTodayOccasionLine(): string | null {
   return `${icon} ${first.name}`;
 }
 
+// يرجع التاريخ الهجري لليوم كسطر مختصر ("٢ ربيع الأول ١٤٤٨هـ")
+function getTodayHijriLine(): string {
+  const hijri = getHijriParts(new Date());
+  return `${hijri.day} ${hijri.month} ${hijri.year}هـ`;
+}
+
+// يحول عدد الدقائق المتبقية لنص عربي مقروء ("ساعة و٢٠ دقيقة" / "٤٥ دقيقة")
+function formatRemaining(totalMinutes: number): string {
+  if (totalMinutes <= 0) return 'الآن';
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  if (hours === 0) return `${mins} دقيقة`;
+  const hoursLabel = hours === 1 ? 'ساعة' : `${hours} ساعات`;
+  if (mins === 0) return hoursLabel;
+  return `${hoursLabel} و${mins} دقيقة`;
+}
+
 // ===== يبني محتوى الإشعار (عنوان + جسم) لصلاة معيّنة "تالية" =====
-function buildNotificationContent(nextKey: PrayerKey, nextTimeLabel: string) {
+// remainingMinutes: الوقت المتبقي للصلاة القادمة بالدقائق - ثابت وقت البناء
+// (سواء عند العرض الفوري أو وقت الجدولة)، مو حي/متحدث لحظياً (يحتاج خدمة
+// خلفية مستمرة غير مبررة لميزة تجميلية - نفس القيد الموضح بأعلى الملف)
+function buildNotificationContent(nextKey: PrayerKey, nextTimeLabel: string, remainingMinutes: number) {
   const nextTitle = PRAYER_TITLES[nextKey];
+  const glyph = PRAYER_GLYPH[nextKey];
   const occasionLine = getTodayOccasionLine();
-  const body = occasionLine
-    ? `الساعة ${nextTimeLabel}\n${occasionLine}`
-    : `الساعة ${nextTimeLabel}`;
-  return { title: `صلاة ${nextTitle}`, body };
+  const hijriLine = getTodayHijriLine();
+
+  const lines = [`الساعة ${nextTimeLabel} - متبقي ${formatRemaining(remainingMinutes)}`];
+  if (occasionLine) lines.push(occasionLine);
+  lines.push(hijriLine);
+
+  return { title: `${glyph} صلاة ${nextTitle}`, body: lines.join('\n') };
 }
 
 // ⚠️ إصلاح جوهري (٢٠٢٦-٠٩-٠٢، "زرين أوقات الصلاة/التسبيح بالإشعار ما
@@ -121,15 +181,18 @@ export async function displayCurrentPrayerNotification(times: PrayerTimesInput):
   }
   if (!found) nextKey = 'fajr'; // كل الصلوات فاتت اليوم -> نعرض فجر باچر كـ"القادمة"
 
-  const { title, body } = buildNotificationContent(nextKey, times[nextKey]);
+  const [nh, nm] = times[nextKey].split(':').map(Number);
+  let remainingMinutes = nh * 60 + nm - nowMinutes;
+  if (remainingMinutes < 0) remainingMinutes += 24 * 60; // عبرت منتصف الليل (فجر باچر)
+
+  const { title, body } = buildNotificationContent(nextKey, times[nextKey], remainingMinutes);
 
   try {
     await notifee.displayNotification({
-      // ⚠️ إصلاح: بدون id ثابت، notifee يسوي إشعار جديد كل استدعاء (يعني
-      // كل فتحة تطبيق = نسخة جديدة تتكدس فوق القديمة بدل ما تحدّثها) - هذا
-      // بالضبط سبب "صلاة العصر" تطلع 3 مرات مكررة. id ثابت يخلي notifee
-      // يحدّث نفس الإشعار مكانه دايماً، بغض النظر عن عدد مرات الاستدعاء
-      id: CURRENT_STATUS_NOTIF_ID,
+      // معرّف مستقل خاص بهذي الصلاة تحديداً (مو معرّف مشترك بين كل الصلوات) -
+      // يمنع تعارض المنبهات مع بعض؛ التنظيف بالأسفل (cancelOtherPrayerNotifications)
+      // هو اللي يضمن ظهور إشعار واحد بس بأي لحظة
+      id: statusIdFor(nextKey),
       title,
       body,
       data: { screen: 'home' },
@@ -147,9 +210,11 @@ export async function displayCurrentPrayerNotification(times: PrayerTimesInput):
         actions: [
           { title: 'أوقات الصلاة', pressAction: pressActionWithLaunch(OPEN_PRAYER_TIMES_ACTION) },
           { title: 'التسبيح', pressAction: pressActionWithLaunch(OPEN_TASBIH_ACTION) },
+          { title: 'الأذكار', pressAction: pressActionWithLaunch(OPEN_ATHKAR_ACTION) },
         ],
       },
     });
+    await cancelOtherPrayerNotifications(nextKey);
   } catch {
     // فشل العرض الفوري (نادر) - الجدولة المستقبلية (scheduleNextPrayerNotifications)
     // تبقى تشتغل عادي كخط دفاع ثاني
@@ -197,19 +262,22 @@ export async function scheduleNextPrayerNotifications(times: PrayerTimesInput): 
       fireDate.setDate(fireDate.getDate() + 1);
     }
 
-    const { title, body } = buildNotificationContent(nextKey, times[nextKey]);
+    // الوقت المتبقي من دخول currentKey لدخول nextKey - فرق ثابت ومعروف مسبقاً
+    // (نفس الفرق يتكرر يومياً)، يُحسب مرة وحدة وقت الجدولة نفسها
+    const [nh, nm] = times[nextKey].split(':').map(Number);
+    let remainingBetween = nh * 60 + nm - (h * 60 + m);
+    if (remainingBetween < 0) remainingBetween += 24 * 60; // العشاء -> الفجر (يعبر منتصف الليل)
+
+    const { title, body } = buildNotificationContent(nextKey, times[nextKey], remainingBetween);
 
     try {
       const id = await notifee.createTriggerNotification(
         {
-          // ⚠️ إصلاح تراكم الإشعارات: بدون id ثابت، notifee يعتبر كل صلاة
-          // "تشتغل" (يوصل وقتها) إشعار جديد تماماً بدل ما يحدّث الإشعار
-          // الموجود بمكانه - وبما إن ongoing:true/autoCancel:false، الإشعار
-          // القديم يضل عالق للأبد. نفس id بالضبط اللي تستخدمه
-          // displayCurrentPrayerNotification يخلي الاثنين (العرض الفوري عند
-          // فتح التطبيق + التحديث التلقائي بكل صلاة) يتشاركون نفس "المكان"
-          // بالضبط، فيصير إشعار واحد يتحدث بمكانه، مو نسخ متراكمة
-          id: CURRENT_STATUS_NOTIF_ID,
+          // معرّف مستقل باسم الصلاة نفسها (nextKey = الصلاة اللي هذا
+          // الإشعار يعرض بياناتها) - يمنع تعارض/إلغاء المنبهات مع بعض؛
+          // نفس المعرّف يتكرر كل يوم لنفس الصلاة (وهذا مقصود ومفيد: تلقائياً
+          // يستبدل جدولة اليوم السابق لنفس الصلاة بدل ما يتراكم)
+          id: statusIdFor(nextKey),
           title,
           body,
           data: { screen: 'home' },
@@ -225,6 +293,7 @@ export async function scheduleNextPrayerNotifications(times: PrayerTimesInput): 
             actions: [
               { title: 'أوقات الصلاة', pressAction: pressActionWithLaunch(OPEN_PRAYER_TIMES_ACTION) },
               { title: 'التسبيح', pressAction: pressActionWithLaunch(OPEN_TASBIH_ACTION) },
+              { title: 'الأذكار', pressAction: pressActionWithLaunch(OPEN_ATHKAR_ACTION) },
             ],
           },
         },
@@ -291,6 +360,8 @@ function handlePress(actionId: string | undefined) {
     path = '/settings/prayer-times';
   } else if (actionId === OPEN_TASBIH_ACTION) {
     path = '/tasbih';
+  } else if (actionId === OPEN_ATHKAR_ACTION) {
+    path = '/athkar';
   }
 
   // نحاول التنقل المباشر فوراً (يشتغل صح لو التطبيق أصلاً بالمقدمة/الواجهة
@@ -311,6 +382,14 @@ export function handleNextPrayerEvent(type: any, detail: any, EventType: any): b
 
   if (type === EventType.PRESS || type === EventType.ACTION_PRESS) {
     handlePress(detail?.pressAction?.id);
+  } else if (type === EventType.DELIVERED) {
+    // ⚠️ جزء أساسي من إصلاح التحديث التلقائي: لما منبّه صلاة معينة يوصل
+    // فعلياً (تحديداً بالخلفية، بدون فتح التطبيق)، نمسح أي إشعار صلاة ثانية
+    // ضل ظاهر من قبل - هذا يضمن إشعار واحد بس دايماً، حتى مع المعرّفات
+    // المستقلة الجديدة لكل صلاة
+    const firedId: string | undefined = detail?.notification?.id;
+    const firedKey = PRAYER_ORDER.find((k) => statusIdFor(k) === firedId);
+    if (firedKey) cancelOtherPrayerNotifications(firedKey).catch(() => {});
   }
   return true;
 }
