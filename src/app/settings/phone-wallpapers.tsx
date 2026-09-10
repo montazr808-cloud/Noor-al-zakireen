@@ -221,13 +221,25 @@ export default function PhoneWallpapersScreen() {
       return;
     }
 
+    // ⚠️ إصلاح ("صلاحية حفظ الصور تطلب من جديد كل مرة"، ٢٠٢٦-٠٩-٠٦): كان
+    // الكود يستدعي requestPermissionsAsync مباشرة بكل ضغطة "حفظ"، بدون ما
+    // يتحقق أول هل الصلاحية ممنوحة أصلاً من مرة سابقة - فيطلع نفس نافذة
+    // النظام بتكرار مزعج حتى لو المستخدم وافق قبل. الحل: نتحقق بـ
+    // getPermissionsAsync() أول (فحص بدون أي نافذة نظام)، ونطلب الصلاحية
+    // فقط لو فعلاً مو ممنوحة.
+    //
     // ⚠️ writeOnly=true: التطبيق يحتاج بس يضيف صور للمعرض، مو يقرأ صور المستخدم
     // الموجودة مسبقاً - هذا يطلب صلاحية أضيق (وأسهل موافقة) خصوصاً على أندرويد
     // ١٣+ حيث صلاحية القراءة الكاملة (READ_MEDIA_IMAGES) منفصلة وأصعب موافقة
     let status: string;
     try {
-      const result = await MediaLibrary.requestPermissionsAsync(true);
-      status = result.status;
+      const existing = await MediaLibrary.getPermissionsAsync(true);
+      if (existing.status === 'granted') {
+        status = 'granted';
+      } else {
+        const result = await MediaLibrary.requestPermissionsAsync(true);
+        status = result.status;
+      }
     } catch (err) {
       console.log('requestPermissionsAsync error:', err);
       Alert.alert('خطأ بالصلاحية', describeError(err));

@@ -160,6 +160,12 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
   // "فتح الإعدادات")، وتتحول لزر "تم التفعيل ✓" - وبس بضغطة ثانية صريحة من
   // المستخدم نفسه (بعد ما يرجع من الإعدادات ويتأكد بعينه) تنعلّم "تم" فعلاً.
   const [overlayOpened, setOverlayOpened] = useState(false);
+  // ⚠️ إصلاح ("شاشة الأذونات تكذب" - صلاحية توفير الطاقة كانت تنعلّم "مفعّلة ✅"
+  // فوراً بمجرد الضغط، حتى لو المستخدم ضغط "إلغاء" أو رجع بدون تفعيل شي
+  // فعلياً بنافذة النظام). نفس أسلوب overlayOpened بالضبط: أول ضغطة تفتح
+  // نافذة النظام بس، وما تنعلّم "تم" إلا بضغطة ثانية صريحة من المستخدم نفسه
+  // بعد ما يرجع ويتأكد بعينه إنه فعّلها فعلاً.
+  const [batteryOpened, setBatteryOpened] = useState(false);
   // تعليمات نصية مخصصة حسب الشركة المصنّعة لهاتف المستخدم - محسوبة مرة
   // وحدة عند فتح الشاشة (Device.brand/manufacturer ثابتة طول الجلسة)
   const [manufacturerInfo] = useState(() => getManufacturerInstructions());
@@ -222,9 +228,15 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
       } else if (key === 'battery') {
         // أهم صلاحية للهدف الحالي (وصول الأذان حتى لو التطبيق مقفول أياماً) -
         // نافذة النظام القياسية لاستثناء تحسين البطارية. ماكو فحص برمجي
-        // موثوق متاح بدون native module إضافي، فنعتبرها "تفاعل معها" بس
-        await requestIgnoreBatteryOptimizations();
-        setStatuses((prev) => ({ ...prev, battery: 'granted' }));
+        // موثوق متاح بدون native module إضافي، فنطبّق نفس أسلوب "overlay"
+        // بالأعلى: أول ضغطة تفتح النافذة بس، الضغطة الثانية (بعد رجوع
+        // المستخدم وتأكده بعينه) هي اللي تعلّم "مفعّلة" فعلاً
+        if (!batteryOpened) {
+          await requestIgnoreBatteryOptimizations();
+          setBatteryOpened(true);
+        } else {
+          setStatuses((prev) => ({ ...prev, battery: 'granted' }));
+        }
       }
     } finally {
       setBusyKey(null);
@@ -286,6 +298,8 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
             const isGranted = status === 'granted';
             const isUnsupported = status === 'unsupported';
             const isOverlayAwaitingConfirm = p.key === 'overlay' && overlayOpened && !isGranted;
+            const isBatteryAwaitingConfirm = p.key === 'battery' && batteryOpened && !isGranted;
+            const isAwaitingConfirm = isOverlayAwaitingConfirm || isBatteryAwaitingConfirm;
 
             return (
               <View key={p.key} style={styles.cardWrap}>
@@ -312,7 +326,7 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
                       activeOpacity={0.75}
                     >
                       <Text style={styles.actionBtnText}>
-                        {isBusy ? '...' : isOverlayAwaitingConfirm ? 'تم التفعيل ✓' : p.actionLabel}
+                        {isBusy ? '...' : isAwaitingConfirm ? 'تم التفعيل ✓' : p.actionLabel}
                       </Text>
                     </TouchableOpacity>
                   )}
@@ -328,7 +342,11 @@ export default function OnboardingPermissions({ onDone }: { onDone: () => void }
 
                 {p.key === 'battery' && (
                   <>
-                    <Text style={styles.helpText}>{manufacturerInfo.text}</Text>
+                    <Text style={styles.helpText}>
+                      {isBatteryAwaitingConfirm
+                        ? 'بعد ما تفعّل "بدون قيود" بنافذة الإعدادات، ارجع هنا واضغط "تم التفعيل"'
+                        : manufacturerInfo.text}
+                    </Text>
                     {hasAutostartScreen && (
                       <TouchableOpacity
                         onPress={() => openManufacturerAutostartSettings()}

@@ -151,13 +151,41 @@ export async function openOverlayPermissionSettings(): Promise<void> {
 // notifee يستدعيها تلقائياً كل ما يطلع تنبيه بخاصية asForegroundService: true.
 // المهم: نرجع Promise ما ينحل إلا بعد ما الصوت يخلص أو يوصل أمر إيقاف - طول
 // ما الـPromise معلق، الخدمة تضل شغالة بالخلفية حتى لو التطبيق مقفول تماماً.
+//
+// ⚠️ إصلاح جوهري ("الأذان يشتغل لصلاة غلط"، ٢٠٢٦-٠٩-٠٦): notifee يستقبل
+// كائن الإشعار نفسه بمعامل هذا الكولباك - كنا نتجاهله بالكامل. المشكلة
+// الحقيقية: لما أندرويد (خصوصاً هواوي/هونر) يؤخر منبّه بسبب توفير الطاقة،
+// يضل عنوان الإشعار الأصلي ("أذان الظهر") بس يرن بوقت متأخر جداً - يمكن
+// يصادف وقت العصر الفعلي، فيبين وكأنه خطأ بتحديد الصلاة بينما الحقيقة إنه
+// أذان قديم متأخر. هسه نقرأ الوقت المفترض المخزّن بـdata.scheduledFor
+// ونقارنه بالوقت الفعلي الآن - لو التأخير كبير (أكثر من ١٥ دقيقة)، نلغي
+// تشغيل الصوت بدل ما نضلل المستخدم بأذان صحيح الاسم بس بوقت غلط تماماً -
+// صمت أفضل من تضليل ديني بخصوص وقت الصلاة.
+const STALE_AZAN_THRESHOLD_MS = 15 * 60 * 1000; // ١٥ دقيقة
+
 export function registerAzanForegroundService() {
   if (Platform.OS !== 'android') return;
   const notifee = getNotifee();
 
-  notifee.registerForegroundService(() => {
+  notifee.registerForegroundService((notification: any) => {
     return new Promise<void>((resolve) => {
       resolveForegroundService = resolve;
+
+      const scheduledFor = Number(notification?.data?.scheduledFor ?? 0);
+      const drift = scheduledFor ? Date.now() - scheduledFor : 0;
+
+      if (scheduledFor && drift > STALE_AZAN_THRESHOLD_MS) {
+        const driftMinutes = Math.round(drift / 60000);
+        console.log(
+          `[notifeeAzan] تجاهلنا تشغيل أذان "${notification?.data?.prayerKey}" - وصل متأخر ${driftMinutes} دقيقة عن وقته الحقيقي (على الأغلب بسبب تقييد بطارية النظام)`
+        );
+        // نزيل الإشعار المتأخر بهدوء بدل ما يضل عالق بدون صوت ولا تفسير،
+        // وننهي الخدمة فوراً بدون تشغيل أي صوت
+        getNotifee().stopForegroundService().catch(() => {});
+        resolve();
+        return;
+      }
+
       startAzanPlayback().catch(() => resolve());
     });
   });
@@ -349,6 +377,11 @@ export async function scheduleAzanNotifications(
           {
             title: PRAYER_TITLES[key],
             body: 'حان وقت الصلاة',
+            // ⚠️ جزء من إصلاح "الأذان يشتغل لصلاة غلط": نخزن الوقت المفترض
+            // بالضبط (scheduledFor) واسم الصلاة (prayerKey) بنفس الإشعار -
+            // وقت التشغيل الفعلي (startAzanPlayback) نستخدمها للتحقق هل
+            // المنبّه اشتغل بوقته الحقيقي أو تأخر بسبب تقييد بطارية النظام
+            data: { prayerKey: key, scheduledFor: String(fireDate.getTime()) },
             android: {
               channelId: AZAN_CHANNEL_ID,
               asForegroundService: true,

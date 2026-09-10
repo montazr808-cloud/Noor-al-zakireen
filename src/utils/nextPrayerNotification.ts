@@ -110,33 +110,28 @@ function getTodayHijriLine(): string {
   return `${hijri.day} ${hijri.month} ${hijri.year}هـ`;
 }
 
-// يحول عدد الدقائق المتبقية لنص عربي مقروء ("ساعة و٢٠ دقيقة" / "٤٥ دقيقة")
-function formatRemaining(totalMinutes: number): string {
-  if (totalMinutes <= 0) return 'الآن';
-  const hours = Math.floor(totalMinutes / 60);
-  const mins = totalMinutes % 60;
-  if (hours === 0) return `${mins} دقيقة`;
-  const hoursLabel = hours === 1 ? 'ساعة' : `${hours} ساعات`;
-  if (mins === 0) return hoursLabel;
-  return `${hoursLabel} و${mins} دقيقة`;
-}
+// ⚠️ إزالة العداد التنازلي (٢٠٢٦-٠٩-٠٦): كان النص الحي ("متبقي ساعة و٢٠
+// دقيقة") ثابت مبني وقت إنشاء الإشعار بس، مو محدّث لحظياً - فأي تأخير
+// بالتسليم (نفس مشكلة تقييد البطارية اللي صلحناها بالأذان) أو حتى مجرد
+// مرور وقت بعد ظهور الإشعار يخلي الرقم غلط تماماً، ويضلل المستخدم بدل
+// ما يفيده. تأكد المستخدم من هذا فعلياً بالاختبار الحقيقي (رقم يبين
+// "ساعة" والصلاة فعلياً بعد ٣ دقائق). حذفناها بالكامل - الإشعار يبين وقت
+// الصلاة الثابت بس، بدون أي حساب "متبقي" مضلل.
 
 // ===== يبني محتوى الإشعار (عنوان + جسم) لصلاة معيّنة "تالية" =====
-// remainingMinutes: الوقت المتبقي للصلاة القادمة بالدقائق - ثابت وقت البناء
-// (سواء عند العرض الفوري أو وقت الجدولة)، مو حي/متحدث لحظياً (يحتاج خدمة
-// خلفية مستمرة غير مبررة لميزة تجميلية - نفس القيد الموضح بأعلى الملف)
-function buildNotificationContent(nextKey: PrayerKey, nextTimeLabel: string, remainingMinutes: number) {
+function buildNotificationContent(nextKey: PrayerKey, nextTimeLabel: string) {
   const nextTitle = PRAYER_TITLES[nextKey];
   const glyph = PRAYER_GLYPH[nextKey];
   const occasionLine = getTodayOccasionLine();
   const hijriLine = getTodayHijriLine();
 
-  const lines = [`الساعة ${nextTimeLabel} - متبقي ${formatRemaining(remainingMinutes)}`];
+  const lines = [`الساعة ${nextTimeLabel}`];
   if (occasionLine) lines.push(occasionLine);
   lines.push(hijriLine);
 
   return { title: `${glyph} صلاة ${nextTitle}`, body: lines.join('\n') };
 }
+
 
 // ⚠️ إصلاح جوهري (٢٠٢٦-٠٩-٠٢، "زرين أوقات الصلاة/التسبيح بالإشعار ما
 // يشتغلون"): notifee.Android.PressAction يدعم خاصية launchActivity - بدونها،
@@ -181,11 +176,7 @@ export async function displayCurrentPrayerNotification(times: PrayerTimesInput):
   }
   if (!found) nextKey = 'fajr'; // كل الصلوات فاتت اليوم -> نعرض فجر باچر كـ"القادمة"
 
-  const [nh, nm] = times[nextKey].split(':').map(Number);
-  let remainingMinutes = nh * 60 + nm - nowMinutes;
-  if (remainingMinutes < 0) remainingMinutes += 24 * 60; // عبرت منتصف الليل (فجر باچر)
-
-  const { title, body } = buildNotificationContent(nextKey, times[nextKey], remainingMinutes);
+  const { title, body } = buildNotificationContent(nextKey, times[nextKey]);
 
   try {
     await notifee.displayNotification({
@@ -262,13 +253,7 @@ export async function scheduleNextPrayerNotifications(times: PrayerTimesInput): 
       fireDate.setDate(fireDate.getDate() + 1);
     }
 
-    // الوقت المتبقي من دخول currentKey لدخول nextKey - فرق ثابت ومعروف مسبقاً
-    // (نفس الفرق يتكرر يومياً)، يُحسب مرة وحدة وقت الجدولة نفسها
-    const [nh, nm] = times[nextKey].split(':').map(Number);
-    let remainingBetween = nh * 60 + nm - (h * 60 + m);
-    if (remainingBetween < 0) remainingBetween += 24 * 60; // العشاء -> الفجر (يعبر منتصف الليل)
-
-    const { title, body } = buildNotificationContent(nextKey, times[nextKey], remainingBetween);
+    const { title, body } = buildNotificationContent(nextKey, times[nextKey]);
 
     try {
       const id = await notifee.createTriggerNotification(
