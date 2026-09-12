@@ -119,17 +119,26 @@ function getTodayHijriLine(): string {
 // الصلاة الثابت بس، بدون أي حساب "متبقي" مضلل.
 
 // ===== يبني محتوى الإشعار (عنوان + جسم) لصلاة معيّنة "تالية" =====
+// ⚠️ إصلاح ("الأرقام والتواريخ صايرة هوسة متلاصقة"، ٢٠٢٦-٠٩-١١): أندرويد
+// بالعرض المصغّر يدمج كل أسطر الـbody بسطر واحد متلاصق بدون أي فاصل - لو
+// خلينا "الساعة ١١:٥٩" بسطر و"٢٨ ربيع الأول ١٤٤٨هـ" بسطر ثاني، تطلع ملتصقة
+// "الساعة ١١:٥٩ ٢٨ ربيع الأول ١٤٤٨هـ" بدون أي حد يفصل بينهم. الحل بشقين:
+// ١) الوقت ينتقل للعنوان نفسه (العنوان ما ينضغط أبداً، دايماً بسطر واحد
+//    واضح) بدل ما يكون أول سطر بالـbody. ٢) أي أسطر متبقية بالـbody (مناسبة
+//    + تاريخ هجري) تنفصل بفاصلة نقطية " • " صريحة بدل الاعتماد على سطر
+//    جديد وحده، حتى لو أندرويد دمجهم بسطر واحد يبقون مفهومين ومفصولين.
 function buildNotificationContent(nextKey: PrayerKey, nextTimeLabel: string) {
   const nextTitle = PRAYER_TITLES[nextKey];
   const glyph = PRAYER_GLYPH[nextKey];
   const occasionLine = getTodayOccasionLine();
   const hijriLine = getTodayHijriLine();
 
-  const lines = [`الساعة ${nextTimeLabel}`];
-  if (occasionLine) lines.push(occasionLine);
-  lines.push(hijriLine);
+  const bodyParts = occasionLine ? [occasionLine, hijriLine] : [hijriLine];
 
-  return { title: `${glyph} صلاة ${nextTitle}`, body: lines.join('\n') };
+  return {
+    title: `${glyph} صلاة ${nextTitle} — الساعة ${nextTimeLabel}`,
+    body: bodyParts.join(' • '),
+  };
 }
 
 
