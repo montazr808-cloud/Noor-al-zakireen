@@ -9,7 +9,6 @@ import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   ImageBackground,
   Linking,
@@ -21,7 +20,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 // ⚠️ SafeAreaView من react-native نفسها ما تشتغل بالاندرويد (بس بالآيفون) — لازم من هذي المكتبة
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -38,7 +37,7 @@ import {
   SELECTED_VOICE_KEY,
   type CustomVoice,
 } from '@/utils/muezzinVoices';
-import { getExactAlarmPermissionStatus, openExactAlarmSettings, openOverlayPermissionSettings, scheduleAzanNotifications } from '@/utils/notifeeAzan';
+import { scheduleAzanNotifications } from '@/utils/notifeeAzan';
 import { scheduleAthkarNotifications } from '@/utils/notificationScheduler';
 import { geocodeAddress, getPrayerTimes } from '@/utils/prayerCalc';
 
@@ -534,54 +533,16 @@ export default function PrayerTimesScreen() {
         // ما نوقف باقي الشاشة لأجل هذا - تنبيه "قربت الصلاة" فوگ ضل شغال بأي حال
       }
 
-      // ===== فحص صلاحية "التنبيهات والمنبهات الدقيقة" - لو مقفلة، أذان الصلاة
-      // ممكن يوصل متأخر بدقايق أو يتجمع مع إشعارات ثانية بدل ما يوصل بالضبط
-      // بوقته.
-      // ⚠️ إصلاح: كانت هذي الكتلة (والكتلة اللي تحتها) تستخدم useRef، اللي
-      // ينصفر تلقائياً كل ما تدخل الشاشة من جديد (مكوّن جديد = ref جديد) -
-      // يعني الرسالة كانت تطلع بكل مرة تدخل فيها شاشة أوقات الصلاة، مو مرة
-      // وحدة فعلياً. الحل: مفتاح دائم بـ AsyncStorage (نفس أسلوب
-      // ALARM_PERMISSION_PROMPTED_KEY المستخدم بـ notifications.ts) - يبقى
-      // محفوظ حتى بعد إغلاق التطبيق بالكامل، فتطلع الرسالة مرة وحدة طول عمر
-      // التطبيق على الجهاز (إلا إذا المستخدم مسح بيانات التطبيق يدوياً) =====
-      try {
-        const alarmPrompted = await AsyncStorage.getItem('@prayer_alarm_permission_prompted_v1');
-        if (alarmPrompted !== 'true') {
-          const alarmStatus = await getExactAlarmPermissionStatus();
-          if (alarmStatus === 'denied') {
-            await AsyncStorage.setItem('@prayer_alarm_permission_prompted_v1', 'true');
-            Alert.alert(
-              'صلاحية إضافية مطلوبة لدقة الأذان',
-              'حتى يوصلك الأذان بالضبط بوقته (مو متأخر بدقايق)، فعّل صلاحية "التنبيهات والمنبهات" لتطبيق نور الذاكرين من إعدادات الجهاز.',
-              [
-                { text: 'لاحقاً', style: 'cancel' },
-                { text: 'فتح الإعدادات', onPress: () => openExactAlarmSettings() },
-              ]
-            );
-          }
-        }
-      } catch {
-        // تجاهل فشل قراءة/كتابة AsyncStorage - أسوأ حالة الرسالة تطلع مرة زيادة
-      }
-
-      // ===== صلاحية "الظهور فوق التطبيقات الأخرى" - نفس مبدأ التخزين الدائم
-      // فوگ، بمفتاح منفصل =====
-      try {
-        const overlayPrompted = await AsyncStorage.getItem('@prayer_overlay_permission_prompted_v1');
-        if (overlayPrompted !== 'true') {
-          await AsyncStorage.setItem('@prayer_overlay_permission_prompted_v1', 'true');
-          Alert.alert(
-            'صلاحية إضافية موصى فيها',
-            'حتى تنعرض بطاقة الأذان بشكل موثوق فوگ أي تطبيق ثاني تكون فاتحه، فعّل صلاحية "الظهور فوق التطبيقات الأخرى" لتطبيق نور الذاكرين من إعدادات الجهاز.',
-            [
-              { text: 'لاحقاً', style: 'cancel' },
-              { text: 'فتح الإعدادات', onPress: () => openOverlayPermissionSettings() },
-            ]
-          );
-        }
-      } catch {
-        // تجاهل
-      }
+      // ⚠️ إصلاح (طلب صريح، "قائمة صلاحية تطلع زايدة بدون فائدة"): هنا سابقاً
+      // كانت كتلتين تعيدون طلب نفس صلاحيتي "المنبهات الدقيقة" و"الظهور فوق
+      // التطبيقات" تلقائياً (Alert + فتح شاشة الإعدادات) كل ما تتغير مواقيت
+      // الصلاة بهذي الشاشة تحديداً - بغض النظر هل المستخدم زار onboarding
+      // ووافق/رفض أصلاً أو لا. هذا كان يسبب تكرار حقيقي: نفس السؤال يطلع
+      // مرة صحيحة ومقصودة بشاشة OnboardingPermissions.tsx (خطوتين تأكيد
+      // واضحتين)، ومرة ثانية هنا تلقائياً بدون أي سياق أو ضغطة من المستخدم -
+      // وهذا بالضبط اللي كان يبين وكأنه "قائمة زايدة بدون فائدة". onboarding
+      // صار المسؤول الوحيد عن هذولا الاثنين؛ انحذفت الكتلتين من هنا نهائياً
+      // بدل ما نكرر نفس المنطق بمكانين.
     }
   };
 

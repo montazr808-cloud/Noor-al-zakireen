@@ -25,6 +25,25 @@ const PRAYER_TITLES: Record<PrayerKey, string> = {
   fajr: 'الفجر', dhuhr: 'الظهر', asr: 'العصر', maghrib: 'المغرب', isha: 'العشاء',
 };
 
+// ⚠️ إصلاح ("الوقت والتاريخ الهجري يطلعون بأرقام إنجليزية خام - هوسة وسط
+// نص عربي"، طلب صريح): باقي التطبيق يستخدم أرقام عربية-هندية بكل مكان
+// (نفس الدالة موجودة بـprayer-times.tsx وtasbih.tsx) - هذا الملف بس كان
+// ناقصها، فيطلع خليط أرقام إنجليزية بإشعار عربي بالكامل.
+const AR_DIGITS = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+const toArabicDigits = (input: string | number): string =>
+  String(input).replace(/[0-9]/g, (d) => AR_DIGITS[parseInt(d, 10)]);
+
+// يحوّل وقت ٢٤ ساعة خام ("18:45") لصيغة ١٢ ساعة عربية واضحة ("٦:٤٥ م") -
+// بدل ما يبين وقت خام بأرقام إنجليزية جنب نص عربي بنفس الإشعار
+function formatArabicTime12h(time24: string): string {
+  const [h, m] = time24.split(':').map(Number);
+  const period = h >= 12 ? 'م' : 'ص';
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  const mm = String(m).padStart(2, '0');
+  return `${toArabicDigits(`${h12}:${mm}`)} ${period}`;
+}
+
 const CHANNEL_ID = 'next-prayer-status';
 const NOTIF_IDS_KEY = 'noor_nextPrayerNotifIds';
 const OPEN_PRAYER_TIMES_ACTION = 'open-prayer-times';
@@ -104,10 +123,12 @@ function getTodayOccasionLine(): string | null {
   return `${icon} ${first.name}`;
 }
 
-// يرجع التاريخ الهجري لليوم كسطر مختصر ("٢ ربيع الأول ١٤٤٨هـ")
+// يرجع التاريخ الهجري لليوم كسطر مختصر ("٢ ربيع الأول ١٤٤٨هـ") - اليوم
+// والسنة يتحولون لأرقام عربية-هندية (نفس التنسيق المستخدم بباقي التطبيق)
+// بدل ما يطلعون بأرقام إنجليزية خام وسط اسم الشهر العربي
 function getTodayHijriLine(): string {
   const hijri = getHijriParts(new Date());
-  return `${hijri.day} ${hijri.month} ${hijri.year}هـ`;
+  return `${toArabicDigits(hijri.day)} ${hijri.month} ${toArabicDigits(hijri.year)}هـ`;
 }
 
 // ⚠️ إزالة العداد التنازلي (٢٠٢٦-٠٩-٠٦): كان النص الحي ("متبقي ساعة و٢٠
@@ -136,7 +157,7 @@ function buildNotificationContent(nextKey: PrayerKey, nextTimeLabel: string) {
   const bodyParts = occasionLine ? [occasionLine, hijriLine] : [hijriLine];
 
   return {
-    title: `${glyph} صلاة ${nextTitle} — الساعة ${nextTimeLabel}`,
+    title: `${glyph} صلاة ${nextTitle} — الساعة ${formatArabicTime12h(nextTimeLabel)}`,
     body: bodyParts.join(' • '),
   };
 }

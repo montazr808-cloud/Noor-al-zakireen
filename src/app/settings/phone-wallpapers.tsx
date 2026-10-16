@@ -252,16 +252,15 @@ export default function PhoneWallpapersScreen() {
     setSaving(item.id);
     try {
       const localUri = await resolveLocalUri(item.uri);
-      const asset = await MediaLibrary.createAssetAsync(localUri);
-
-      // لو الألبوم موجود مسبقاً، createAlbumAsync ينكسر على بعض إصدارات أندرويد
-      // بدل ما يضيف الصورة له - لازم نتأكد أول ونستخدم addAssetsToAlbumAsync
-      const existingAlbum = await MediaLibrary.getAlbumAsync('نور الذاكرين');
-      if (existingAlbum) {
-        await MediaLibrary.addAssetsToAlbumAsync([asset], existingAlbum, false);
-      } else {
-        await MediaLibrary.createAlbumAsync('نور الذاكرين', asset, false);
-      }
+      // ⚠️ إصلاح ("نافذة هل تريد نور الذاكرين يعدل على صور تتكرر بكل تنزيلة"،
+      // ٢٠٢٦-٠٩-١٨): قبل، بعد createAssetAsync كان الكود يحاول ينقل الصورة
+      // (copyAsset:false) لألبوم مخصص "نور الذاكرين" عبر createAlbumAsync.
+      // بأندرويد الحديث (سكوبد ستوريج)، عملية "نقل" ملف داخل الـ MediaStore
+      // تطلب موافقة نظام منفصلة لكل ملف - وبما إن كل صورة جديدة تنزّلها هي
+      // asset جديد، النافذة كانت تطلع من جديد بكل تنزيلة. شلنا خطوة الألبوم
+      // المخصص بالكامل: الصورة تنحفظ مباشرة بالمعرض العام بعملية create
+      // وحدة بس (بدون أي نقل/تعديل لاحق)، فما تبقى أي سبب لتكرار النافذة.
+      await MediaLibrary.createAssetAsync(localUri);
 
       showSavedToast(item.title);
     } catch (err) {
@@ -463,7 +462,9 @@ const s = StyleSheet.create({
   },
 
   toast: {
-    position: 'absolute', top: 12, left: 16, right: 16, zIndex: 999,
+    // ⚠️ إصلاح (طلب صريح: "تم الحفظ" كانت ملتصقة أعلى الشاشة) - هسه بنص
+    // الشاشة تقريباً، مكان مريح للعين، مو تحت شريط الحالة مباشرة
+    position: 'absolute', top: '45%', left: 16, right: 16, zIndex: 999,
     flexDirection: 'row', alignItems: 'center', gap: 10,
     borderRadius: 16, overflow: 'hidden',
     borderWidth: 1, borderColor: C.glassBorder,

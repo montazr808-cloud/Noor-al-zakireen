@@ -13,7 +13,7 @@
 // prayer-times.tsx نفسه، منطق منفصل).
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
+import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio';
 import { Platform } from 'react-native';
 
 import {
@@ -221,6 +221,19 @@ async function startAzanPlayback() {
       resolveForegroundService?.();
       resolveForegroundService = null;
       return;
+    }
+
+    // ⚠️ إصلاح ("الأذان يوقف فوراً لما تطلع من التطبيق - هونر تحديداً"):
+    // كان ماكو أي تفعيل لجلسة تشغيل صوت بالخلفية قبل createAudioPlayer -
+    // بدون shouldPlayInBackground، النظام يقدر يعلّق/يوقف تشغيل الصوت نفسه
+    // أول ما التطبيق يطلع من الواجهة، حتى لو الـforeground service (المسؤول
+    // عن بقاء العملية حية) شغال زين. سامسونج متساهل بهذا الجانب افتراضياً؛
+    // Magic OS بهونر أشد صرامة - يفسر بالضبط "يشتغل جوة التطبيق، يوقف أول
+    // ما تطلع منه". هذا الإعداد لازم ينفعل قبل إنشاء المشغّل بكل مرة.
+    try {
+      await setAudioModeAsync({ shouldPlayInBackground: true });
+    } catch (audioModeErr) {
+      console.log('[notifeeAzan] فشل تفعيل وضع تشغيل الصوت بالخلفية:', audioModeErr);
     }
 
     const player = createAudioPlayer(source);

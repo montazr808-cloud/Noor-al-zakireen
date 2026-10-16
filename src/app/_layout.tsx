@@ -90,6 +90,15 @@ export default function Layout() {
     });
   }, []);
 
+  // ⚠️ إضافة (طلب صريح): فحص وجود نسخة أحدث بكوكل بلاي - يخص مستخدمي نسخة
+  // الـAPK الموزّعة مباشرة اللي ما يوصلهم تحديث تلقائي. يشتغل مرة وحدة بكل
+  // فتحة تطبيق، مستقل عن onboarding (فحص خفيف، ما يحتاج ينتظر شي)
+  useEffect(() => {
+    import('@/utils/updateCheck').then(({ checkForUpdate }) => {
+      checkForUpdate().catch(() => {});
+    });
+  }, []);
+
   useEffect(() => {
     import('@/utils/hijriSync').then(({ loadCachedOffset, syncNajafOffset }) => {
       loadCachedOffset().then(() => {
